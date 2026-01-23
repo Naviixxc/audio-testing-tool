@@ -41,39 +41,51 @@
 }
 
 .dark {
-  /* Dark theme with improved contrast */
-  --background: #0b1220;
-  --foreground: #e6eef8;
-  --card: #0f1724;
-  --card-foreground: #e6eef8;
-  --popover: #0f1724;
-  --popover-foreground: #e6eef8;
-  --primary: #2563eb;
+  /* Professional Dark Theme for Audio Testing Tool */
+  --background: #000000; /* Pure black background */
+  --foreground: #e0e0e0; /* Light gray text */
+  --card: #0a0a0a; /* Very dark gray for cards */
+  --card-foreground: #e0e0e0;
+  --popover: #0a0a0a;
+  --popover-foreground: #e0e0e0;
+  
+  /* Audio-themed colors */
+  --primary: #8b5cf6; /* Purple - modern audio theme */
   --primary-foreground: #ffffff;
-  --secondary: #111827;
-  --secondary-foreground: #9ca3af;
-  --muted: #0b1220;
-  --muted-foreground: #9ca3af;
-  --accent: #2563eb;
+  --secondary: #1a1a1a; /* Dark gray for secondary elements */
+  --secondary-foreground: #b0b0b0;
+  --muted: #0f0f0f; /* Subtle dark for muted elements */
+  --muted-foreground: #808080;
+  
+  /* Accent colors for audio controls */
+  --accent: #06b6d4; /* Cyan - perfect for audio */
   --accent-foreground: #ffffff;
-  --destructive: #ef4444;
+  
+  /* Status colors */
+  --destructive: #ef4444; /* Red for errors */
   --destructive-foreground: #ffffff;
-  --border: #1f2937;
-  --input: #0b1220;
-  --ring: #60a5fa;
-  --chart-1: #2563eb;
-  --chart-2: #ff7f0e;
-  --chart-3: #2ca02c;
-  --chart-4: #d62728;
-  --chart-5: #9467bd;
-  --sidebar: #0b1220;
-  --sidebar-foreground: #e6eef8;
-  --sidebar-primary: #2563eb;
+  
+  /* Borders and inputs */
+  --border: #2a2a2a; /* Subtle border */
+  --input: #0a0a0a;
+  --ring: #8b5cf6; /* Purple ring for focus */
+  
+  /* Audio-specific colors */
+  --chart-1: #8b5cf6; /* Purple - primary audio */
+  --chart-2: #06b6d4; /* Cyan - secondary audio */
+  --chart-3: #10b981; /* Green - success/play state */
+  --chart-4: #f59e0b; /* Amber - warning/pause */
+  --chart-5: #ef4444; /* Red - stop/error */
+  
+  /* Sidebar colors */
+  --sidebar: #0a0a0a;
+  --sidebar-foreground: #e0e0e0;
+  --sidebar-primary: #8b5cf6;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #111827;
-  --sidebar-accent-foreground: #e6eef8;
-  --sidebar-border: #1f2937;
-  --sidebar-ring: #60a5fa;
+  --sidebar-accent: #1a1a1a;
+  --sidebar-accent-foreground: #b0b0b0;
+  --sidebar-border: #2a2a2a;
+  --sidebar-ring: #8b5cf6;
 }
 
 @theme inline {
@@ -123,6 +135,52 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+  
+  /* Force dark theme for audio testing tool */
+  body {
+    background-color: #000000 !important;
+    color: #e0e0e0 !important;
+  }
+  
+  /* Custom scrollbar for dark theme */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0a0a0a;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2a2a2a;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a3a3a;
+  }
+  
+  /* Audio control glow effects */
+  .audio-control {
+    transition: all 0.2s ease;
+  }
+  .audio-control:hover {
+    box-shadow: 0 0 15px rgba(139, 92, 246, 0.3);
+  }
+  .audio-control.active {
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.5);
+  }
+  
+  /* Audio waveform effect */
+  .audio-waveform {
+    background: linear-gradient(45deg, #8b5cf6, #06b6d4);
+    background-size: 200% 200%;
+    animation: waveGradient 3s ease infinite;
+  }
+  
+  @keyframes waveGradient {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
   }
 }
 

@@ -47,6 +47,10 @@ export default function AudioTesterTool() {
   const winDialogueAudioRef = useRef<HTMLAudioElement | null>(null);
   const sfxAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
   const soundQueueRef = useRef(createSoundQueue());
+  
+  // Fade management refs
+  const bgmFadeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const originalBGMVolumeRef = useRef<number>(1);
 
   // State: Audio Files
   const [bgm, setBgm] = useState<AudioFile | null>(null);
@@ -243,6 +247,7 @@ export default function AudioTesterTool() {
           };
           setBgm(bgmFile);
           setBgmVolume(settings.bgmVolume);
+          originalBGMVolumeRef.current = settings.bgmVolume; // Set original volume
           setBgmLoop(settings.bgmLoop);
           setBgmCurrentTime(settings.bgmCurrentTime);
           setBgmPlaying(false); // Reset playing state on load
@@ -845,15 +850,101 @@ export default function AudioTesterTool() {
     }
   };
 
+  // BGM Fade Functions
+  const fadeOutBGM = useCallback(() => {
+    if (!bgmAudioRef.current || bgmVolume === 0) return;
+    
+    // Clear any existing fade interval
+    if (bgmFadeIntervalRef.current) {
+      clearInterval(bgmFadeIntervalRef.current);
+    }
+    
+    // Store original volume
+    originalBGMVolumeRef.current = bgmVolume;
+    
+    const fadeDuration = 1000; // 1 second
+    const fadeSteps = 20; // 20 steps for smooth fade
+    const fadeInterval = fadeDuration / fadeSteps;
+    const volumeStep = bgmVolume / fadeSteps;
+    let currentStep = 0;
+    
+    bgmFadeIntervalRef.current = setInterval(() => {
+      currentStep++;
+      const newVolume = Math.max(0, bgmVolume - (volumeStep * currentStep));
+      
+      if (bgmAudioRef.current) {
+        bgmAudioRef.current.volume = newVolume * masterVolume;
+      }
+      
+      if (currentStep >= fadeSteps || newVolume <= 0) {
+        if (bgmFadeIntervalRef.current) {
+          clearInterval(bgmFadeIntervalRef.current);
+          bgmFadeIntervalRef.current = null;
+        }
+        if (bgmAudioRef.current) {
+          bgmAudioRef.current.volume = 0;
+        }
+      }
+    }, fadeInterval);
+  }, [bgmVolume, masterVolume]);
+  
+  const fadeInBGM = useCallback(() => {
+    if (!bgmAudioRef.current || !bgmPlaying) return;
+    
+    // Clear any existing fade interval
+    if (bgmFadeIntervalRef.current) {
+      clearInterval(bgmFadeIntervalRef.current);
+    }
+    
+    const targetVolume = originalBGMVolumeRef.current;
+    const fadeDuration = 1000; // 1 second
+    const fadeSteps = 20; // 20 steps for smooth fade
+    const fadeInterval = fadeDuration / fadeSteps;
+    const volumeStep = targetVolume / fadeSteps;
+    let currentStep = 0;
+    
+    bgmFadeIntervalRef.current = setInterval(() => {
+      currentStep++;
+      const newVolume = Math.min(targetVolume, volumeStep * currentStep);
+      
+      if (bgmAudioRef.current) {
+        bgmAudioRef.current.volume = newVolume * masterVolume;
+      }
+      
+      if (currentStep >= fadeSteps || newVolume >= targetVolume) {
+        if (bgmFadeIntervalRef.current) {
+          clearInterval(bgmFadeIntervalRef.current);
+          bgmFadeIntervalRef.current = null;
+        }
+        if (bgmAudioRef.current) {
+          bgmAudioRef.current.volume = targetVolume * masterVolume;
+        }
+      }
+    }, fadeInterval);
+  }, [bgmPlaying, masterVolume]);
+
   // Win Dialogue Playback
   const toggleWinDialoguePlayback = () => {
     if (!winDialogue || !winDialogueAudioRef.current) return;
     if (winDialoguePlaying) {
+      // Stop Win Dialogue and fade BGM back in
       winDialogueAudioRef.current.pause();
       setWinDialoguePlaying(false);
+      fadeInBGM(); // Fade BGM back in
     } else {
+      // Start Win Dialogue and fade BGM out
+      fadeOutBGM(); // Fade BGM out first
       winDialogueAudioRef.current.play();
       setWinDialoguePlaying(true);
+      
+      // Set up ended event to fade BGM back in when Win Dialogue finishes
+      const handleWinDialogueEnded = () => {
+        setWinDialoguePlaying(false);
+        fadeInBGM(); // Fade BGM back in
+        winDialogueAudioRef.current?.removeEventListener('ended', handleWinDialogueEnded);
+      };
+      
+      winDialogueAudioRef.current.addEventListener('ended', handleWinDialogueEnded);
     }
   };
 
@@ -863,6 +954,7 @@ export default function AudioTesterTool() {
     winDialogueAudioRef.current.currentTime = 0;
     setWinDialoguePlaying(false);
     setWinDialogueCurrentTime(0);
+    fadeInBGM(); // Fade BGM back in when stopped
   };
 
   const restartWinDialogue = () => {
@@ -883,65 +975,74 @@ export default function AudioTesterTool() {
   const playSFX = useCallback((sfxId: string, onEnded?: () => void) => {
     // Get or create audio element for this SFX
     let audioEl = sfxAudioRefs.current.get(sfxId);
-    if (!audioEl) {
-      const sfxTrack = sfxTracks.find((t) => t.id === sfxId);
-      if (!sfxTrack) return;
+    const sfxTrack = sfxTracks.find((t) => t.id === sfxId);
+    if (!sfxTrack) return;
 
+    // If audio element exists, stop it immediately and reset to beginning
+    if (audioEl) {
+      // Stop current playback immediately
+      audioEl.pause();
+      audioEl.currentTime = 0; // Reset to beginning
+      
+      // Remove old event listeners to prevent stacking
+      const newAudioEl = new Audio(sfxTrack.url);
+      newAudioEl.preload = 'auto';
+      newAudioEl.crossOrigin = 'anonymous';
+      
+      // Replace the old audio element with fresh one
+      sfxAudioRefs.current.set(sfxId, newAudioEl);
+      audioEl = newAudioEl;
+    } else {
       // Create fresh audio element
       audioEl = new Audio(sfxTrack.url);
       audioEl.preload = 'auto';
       audioEl.crossOrigin = 'anonymous';
       sfxAudioRefs.current.set(sfxId, audioEl);
-
-      // Track when sound ends for UI updates
-      audioEl.addEventListener('ended', () => {
-        setSfxTracks((prev) =>
-          prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
-        );
-        setActiveSFXCount((prev) => Math.max(0, prev - 1));
-        try {
-          onEnded?.();
-        } catch (err) {
-          console.error('[playSFX] onEnded handler error:', err);
-        }
-      });
-
-      // Keep UI in sync: update currentTime on timeupdate events for precise seconds display
-      audioEl.addEventListener('timeupdate', () => {
-        const ct = audioEl!.currentTime || 0;
-        setSfxTracks((prev) => prev.map((t) => (t.id === sfxId ? { ...t, currentTime: ct } : t)));
-      });
-
-      audioEl.addEventListener('error', (e) => {
-        console.error('[playSFX] audio element error', e);
-        setSfxTracks((prev) =>
-          prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
-        );
-      });
-
-      audioEl.addEventListener('playing', () => {
-        setSfxTracks((prev) =>
-          prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: true } : t))
-        );
-      });
-
-      audioEl.addEventListener('pause', () => {
-        setSfxTracks((prev) =>
-          prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
-        );
-      });
     }
 
-    const sfxTrack = sfxTracks.find((t) => t.id === sfxId);
-    if (!sfxTrack || !audioEl) return;
+    // Track when sound ends for UI updates
+    audioEl.addEventListener('ended', () => {
+      setSfxTracks((prev) =>
+        prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
+      );
+      setActiveSFXCount((prev) => Math.max(0, prev - 1));
+      try {
+        onEnded?.();
+      } catch (err) {
+        console.error('[playSFX] onEnded handler error:', err);
+      }
+    });
 
-    // Ensure audio uses current track volume/loop settings and resume where appropriate
+    // Keep UI in sync: update currentTime on timeupdate events for precise seconds display
+    audioEl.addEventListener('timeupdate', () => {
+      const ct = audioEl!.currentTime || 0;
+      setSfxTracks((prev) => prev.map((t) => (t.id === sfxId ? { ...t, currentTime: ct } : t)));
+    });
+
+    audioEl.addEventListener('error', (e) => {
+      console.error('[playSFX] audio element error', e);
+      setSfxTracks((prev) =>
+        prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
+      );
+    });
+
+    audioEl.addEventListener('playing', () => {
+      setSfxTracks((prev) =>
+        prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: true } : t))
+      );
+    });
+
+    audioEl.addEventListener('pause', () => {
+      setSfxTracks((prev) =>
+        prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
+      );
+    });
+
+    // Ensure audio uses current track volume/loop settings
     audioEl.volume = sfxTrack.volume * masterVolume;
     audioEl.loop = sfxTrack.loop;
 
-    // No panning: simplified playback path
-
-    // Trigger playback - this guarantees audio output; handle promise rejection
+    // Trigger playback immediately from the beginning
     const playPromise = audioEl.play();
     if (playPromise) {
       playPromise.catch((error) => {
@@ -1020,7 +1121,7 @@ export default function AudioTesterTool() {
   }, [sfxTracks]);
 
   return (
-    <div id="main" className="min-h-screen bg-background text-foreground">
+    <div id="main" className="min-h-screen bg-background text-foreground dark">
       {/* Header */}
       <header className="border-b border-border bg-card/50 backdrop-blur">
         <div className="max-w-full px-6 py-4">
@@ -1118,9 +1219,9 @@ export default function AudioTesterTool() {
                     <div className="grid grid-cols-4 gap-2">
                       <button
                         onClick={toggleBGMPlayback}
-                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors ${
+                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors audio-control ${
                           bgmPlaying 
-                            ? 'bg-green-600 hover:bg-green-700 text-white' 
+                            ? 'bg-green-600 hover:bg-green-700 text-white active' 
                             : 'bg-primary hover:bg-primary/90 text-primary-foreground'
                         }`}
                       >
@@ -1128,7 +1229,7 @@ export default function AudioTesterTool() {
                       </button>
                       <button
                         onClick={stopBGM}
-                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors ${
+                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors audio-control ${
                           bgmPlaying 
                             ? 'bg-red-600 hover:bg-red-700 text-white' 
                             : 'bg-muted hover:bg-muted/80 text-muted-foreground'
@@ -1138,7 +1239,7 @@ export default function AudioTesterTool() {
                       </button>
                       <button
                         onClick={restartBGM}
-                        className="flex items-center justify-center p-2 bg-muted hover:bg-muted/80 text-muted-foreground rounded font-medium text-sm transition-colors"
+                        className="flex items-center justify-center p-2 bg-muted hover:bg-muted/80 text-muted-foreground rounded font-medium text-sm transition-colors audio-control"
                       >
                         <RotateCcw size={14} />
                       </button>
@@ -1150,8 +1251,8 @@ export default function AudioTesterTool() {
                         }}
                         aria-pressed={bgmLoop}
                         title={bgmLoop ? 'Loop enabled' : 'Enable loop'}
-                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors ${
-                          bgmLoop ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
+                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors audio-control ${
+                          bgmLoop ? 'bg-green-600 hover:bg-green-700 text-white active' : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
                         }`}
                       >
                         <Repeat2 size={14} />
@@ -1173,6 +1274,7 @@ export default function AudioTesterTool() {
                           onChange={(e) => {
                             const vol = parseFloat(e.target.value);
                             setBgmVolume(vol);
+                            originalBGMVolumeRef.current = vol; // Update original volume
                             if (bgmAudioRef.current) bgmAudioRef.current.volume = vol * masterVolume;
                           }}
                           className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
