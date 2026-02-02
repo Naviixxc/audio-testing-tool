@@ -22,7 +22,7 @@ interface SFXControllerProps {
   sfxId: string;
   fileName: string;
   duration: number;
-  audioRef: React.RefObject<HTMLAudioElement>;
+  audioRef: React.RefObject<HTMLAudioElement | null>;
   volume: number;
   loop: boolean;
   isPlaying: boolean;
@@ -112,22 +112,19 @@ export function SFXController({
       onKeyDown={handleKeyDown}
       role="region"
       aria-label={`SFX controls for ${fileName}`}
-      className="rounded-lg border border-slate-700 bg-slate-800/50 p-3 space-y-3 focus:outline-none"
+      className="rounded-lg border border-slate-700 bg-slate-800/50 p-4 space-y-3 focus:outline-none"
       title={`Keyboard: Space play/pause · ←/→ seek · L toggle loop`}
     >
-      {/* Header with file name and controls */}
+      {/* Header with file name and file type */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h4 className="font-medium text-slate-100 truncate text-xs">{fileName}</h4>
-            <span className="text-[8px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">
+            <h4 className="font-medium text-slate-100 truncate text-sm">{fileName}</h4>
+            <span className="text-[10px] px-2 py-1 rounded bg-slate-700 text-slate-300 font-mono">
               {fileExt}
             </span>
-            {isReplacing && (
-              <span className="ml-1 text-[8px] text-yellow-300 bg-yellow-900/20 px-1 py-0.5 rounded">Replacing...</span>
-            )}
           </div>
-          <p className="text-[10px] text-slate-400 mt-0.5">
+          <p className="text-xs text-slate-400 mt-1">
             {formatTime(currentTime)} / {formatTime(duration)}
           </p>
         </div>
@@ -167,10 +164,10 @@ export function SFXController({
       </div>
 
       {/* Playback Controls */}
-      <div className="grid grid-cols-4 gap-1">
+      <div className="grid grid-cols-5 gap-1">
         <button
           onClick={isPlaying ? onPause : onPlay}
-          className={`flex items-center justify-center p-1.5 rounded font-medium text-sm transition-all transform hover:scale-105 ${
+          className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-all transform hover:scale-105 ${
             isPlaying 
               ? 'bg-green-600 hover:bg-green-700 text-white shadow-lg shadow-green-600/30' 
               : 'bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-600/30'
@@ -182,7 +179,7 @@ export function SFXController({
 
         <button
           onClick={onStop}
-          className={`flex items-center justify-center p-1.5 rounded font-medium text-sm transition-all transform hover:scale-105 ${
+          className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-all transform hover:scale-105 ${
             isPlaying 
               ? 'bg-red-600 hover:bg-red-700 text-white shadow-lg shadow-red-600/30' 
               : 'bg-slate-700 hover:bg-slate-600 text-slate-100 shadow-lg shadow-slate-700/30'
@@ -194,7 +191,7 @@ export function SFXController({
 
         <button
           onClick={onRestart}
-          className="flex items-center justify-center p-1.5 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded font-medium text-sm transition-all transform hover:scale-105 shadow-lg shadow-slate-700/30"
+          className="flex items-center justify-center p-2 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded font-medium text-sm transition-all transform hover:scale-105 shadow-lg shadow-slate-700/30"
           title="Restart from beginning"
         >
           <RotateCcw size={14} />
@@ -202,7 +199,7 @@ export function SFXController({
 
         <button
           onClick={() => onLoopToggle(!loop)}
-          className={`flex items-center justify-center p-1.5 rounded font-medium text-sm transition-all transform hover:scale-105 ${
+          className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-all transform hover:scale-105 ${
             loop
               ? 'bg-green-600 hover:bg-green-700 text-white shadow-lg shadow-green-600/30'
               : 'bg-slate-700 hover:bg-slate-600 text-slate-100 shadow-lg shadow-slate-700/30'
@@ -210,6 +207,14 @@ export function SFXController({
           title={loop ? 'Loop enabled' : 'Loop disabled'}
         >
           <Repeat2 size={14} />
+        </button>
+
+        <button
+          onClick={() => onVolumeChange(volume === 0 ? 0.5 : 0)}
+          className="flex items-center justify-center p-2 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded font-medium text-sm transition-all transform hover:scale-105 shadow-lg shadow-slate-700/30"
+          title={volume === 0 ? 'Unmute' : 'Mute'}
+        >
+          {volume === 0 ? <VolumeX size={14} className="text-slate-400" /> : <Volume2 size={14} className="text-slate-300" />}
         </button>
       </div>
 
@@ -225,13 +230,6 @@ export function SFXController({
           className="flex-1 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
           title={`Volume: ${Math.round(volume * 100)}%`}
         />
-        <button
-          onClick={() => onVolumeChange(volume === 0 ? 0.5 : 0)}
-          className="p-1.5 hover:bg-slate-600 rounded transition-colors"
-          title={volume === 0 ? 'Unmute' : 'Mute'}
-        >
-          {volume === 0 ? <VolumeX size={14} className="text-slate-400" /> : <Volume2 size={14} className="text-slate-300" />}
-        </button>
       </div>
 
     </div>
