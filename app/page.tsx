@@ -1067,6 +1067,18 @@ export default function AudioTesterTool() {
     }, fadeInterval);
   }, [bgmPlaying, masterVolume]);
 
+  const activeWinDialogueIdRef = useRef<string | null>(null);
+  const winDialogueEndedHandlersRef = useRef(new Map<string, () => void>());
+
+  const removeWinDialogueEndedHandler = (trackId: string) => {
+    const audioRef = winDialogueAudioRefs.current.get(trackId);
+    const handler = winDialogueEndedHandlersRef.current.get(trackId);
+    if (audioRef && handler) {
+      audioRef.removeEventListener('ended', handler);
+    }
+    winDialogueEndedHandlersRef.current.delete(trackId);
+  };
+
   // Win Dialogue Playback
   const toggleWinDialoguePlayback = (trackId: string) => {
     const track = winDialogueTracks.find(t => t.id === trackId);
@@ -1075,41 +1087,92 @@ export default function AudioTesterTool() {
     if (!track || !audioRef) return;
     
     if (track.isPlaying) {
-      // Stop Win Dialogue and fade BGM back in
+      // Pause this Win Dialogue and fade BGM back in
+      removeWinDialogueEndedHandler(trackId);
       audioRef.pause();
+      const ct = audioRef.currentTime || 0;
       setWinDialogueTracks(prev => prev.map(t => 
-        t.id === trackId ? { ...t, isPlaying: false } : t
+        t.id === trackId ? { ...t, isPlaying: false, currentTime: ct } : t
       ));
+      if (activeWinDialogueIdRef.current === trackId) {
+        activeWinDialogueIdRef.current = null;
+      }
       fadeInBGMFromWinDialogue(); // Fade BGM back in from 50%
-    } else {
-      // Start Win Dialogue and fade BGM out to 50%
-      fadeOutBGMForWinDialogue(); // Fade BGM to 50% over 5 seconds
-      audioRef.play();
+      return;
+    }
+
+    // Exclusive playback: stop any other currently playing Win Dialogue immediately
+    const otherPlayingIds = winDialogueTracks.filter(t => t.isPlaying && t.id !== trackId).map(t => t.id);
+    if (otherPlayingIds.length > 0) {
+      otherPlayingIds.forEach((id) => {
+        const otherAudio = winDialogueAudioRefs.current.get(id);
+        if (otherAudio) {
+          removeWinDialogueEndedHandler(id);
+          otherAudio.pause();
+          try {
+            otherAudio.currentTime = 0;
+          } catch {
+            // ignore
+          }
+        }
+      });
+    }
+
+    // Start this Win Dialogue and fade BGM out to 50%
+    fadeOutBGMForWinDialogue(); // Fade BGM to 50% over 5 seconds
+    removeWinDialogueEndedHandler(trackId);
+    activeWinDialogueIdRef.current = trackId;
+
+    // Update state for exclusivity in one shot
+    const stoppedSet = new Set(otherPlayingIds);
+    setWinDialogueTracks(prev => prev.map(t => {
+      if (t.id === trackId) return { ...t, isPlaying: true };
+      if (stoppedSet.has(t.id)) return { ...t, isPlaying: false, currentTime: 0 };
+      return t;
+    }));
+
+    // Set up ended event to fade BGM back in when Win Dialogue finishes
+    const handleWinDialogueEnded = () => {
       setWinDialogueTracks(prev => prev.map(t => 
-        t.id === trackId ? { ...t, isPlaying: true } : t
+        t.id === trackId ? { ...t, isPlaying: false, currentTime: 0 } : t
       ));
-      
-      // Set up ended event to fade BGM back in when Win Dialogue finishes
-      const handleWinDialogueEnded = () => {
+      if (activeWinDialogueIdRef.current === trackId) {
+        activeWinDialogueIdRef.current = null;
+      }
+      fadeInBGMFromWinDialogue(); // Fade BGM back in from 50%
+      removeWinDialogueEndedHandler(trackId);
+    };
+    winDialogueEndedHandlersRef.current.set(trackId, handleWinDialogueEnded);
+    audioRef.addEventListener('ended', handleWinDialogueEnded);
+
+    const playPromise = audioRef.play();
+    if (playPromise) {
+      playPromise.catch((err) => {
+        console.error('[toggleWinDialoguePlayback] play failed:', err);
         setWinDialogueTracks(prev => prev.map(t => 
           t.id === trackId ? { ...t, isPlaying: false } : t
         ));
-        fadeInBGMFromWinDialogue(); // Fade BGM back in from 50%
-        audioRef.removeEventListener('ended', handleWinDialogueEnded);
-      };
-      
-      audioRef.addEventListener('ended', handleWinDialogueEnded);
+        if (activeWinDialogueIdRef.current === trackId) {
+          activeWinDialogueIdRef.current = null;
+        }
+        removeWinDialogueEndedHandler(trackId);
+        fadeInBGMFromWinDialogue();
+      });
     }
   };
 
   const stopWinDialogue = (trackId: string) => {
     const audioRef = winDialogueAudioRefs.current.get(trackId);
     if (!audioRef) return;
+    removeWinDialogueEndedHandler(trackId);
     audioRef.pause();
     audioRef.currentTime = 0;
     setWinDialogueTracks(prev => prev.map(t => 
       t.id === trackId ? { ...t, isPlaying: false, currentTime: 0 } : t
     ));
+    if (activeWinDialogueIdRef.current === trackId) {
+      activeWinDialogueIdRef.current = null;
+    }
     fadeInBGMFromWinDialogue(); // Fade BGM back in from 50% when stopped
   };
 
@@ -1300,7 +1363,6 @@ export default function AudioTesterTool() {
   const forceStopSFX = (sfxId: string) => {
     // Get the audio element and its handlers
     const audioEl = sfxAudioRefs.current.get(sfxId);
-    const handlers = sfxEventHandlers.current.get(sfxId);
 
     // Cancel any pending play() that may still resolve after we stop
     bumpSfxToken(sfxId);
