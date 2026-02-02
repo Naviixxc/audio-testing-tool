@@ -15,6 +15,10 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  Image,
+  Square,
 } from 'lucide-react';
 import {
   uploadAudioFile,
@@ -33,8 +37,16 @@ import { SFXController } from '@/components/SFXController';
 import { createSoundQueue, type QueueStats } from '@/lib/queueService';
 import { useToast } from '@/hooks/use-toast';
 import { audioStorage } from '@/lib/audioStorage';
+import Layout from '@/components/Layout';
 
 interface SFXTrack extends AudioFile {
+  volume: number;
+  isPlaying: boolean;
+  currentTime: number;
+  loop: boolean;
+}
+
+interface WinDialogueTrack extends AudioFile {
   volume: number;
   isPlaying: boolean;
   currentTime: number;
@@ -44,7 +56,7 @@ interface SFXTrack extends AudioFile {
 export default function AudioTesterTool() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const bgmAudioRef = useRef<HTMLAudioElement | null>(null);
-  const winDialogueAudioRef = useRef<HTMLAudioElement | null>(null);
+  const winDialogueAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
   const sfxAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
   const soundQueueRef = useRef(createSoundQueue());
   
@@ -54,7 +66,7 @@ export default function AudioTesterTool() {
 
   // State: Audio Files
   const [bgm, setBgm] = useState<AudioFile | null>(null);
-  const [winDialogue, setWinDialogue] = useState<AudioFile | null>(null);
+  const [winDialogueTracks, setWinDialogueTracks] = useState<WinDialogueTrack[]>([]);
   const [sfxTracks, setSfxTracks] = useState<SFXTrack[]>([]);
 
   // State: Reference Image
@@ -68,12 +80,8 @@ export default function AudioTesterTool() {
   const [bgmVolume, setBgmVolume] = useState(1);
   const [bgmPlaying, setBgmPlaying] = useState(false);
   const [bgmCurrentTime, setBgmCurrentTime] = useState(0);
-  
-  const [winDialogueLoop, setWinDialogueLoop] = useState(false);
-  const [winDialogueVolume, setWinDialogueVolume] = useState(1);
-  const [winDialoguePlaying, setWinDialoguePlaying] = useState(false);
-  const [winDialogueCurrentTime, setWinDialogueCurrentTime] = useState(0);
-  
+  const [bgmFadeStatus, setBgmFadeStatus] = useState<'normal' | 'faded' | 'fading-out' | 'fading-in'>('normal');
+  const [bgmEffectiveVolume, setBgmEffectiveVolume] = useState(1); // Real-time volume during fades
 
   // State: Audio Effects
   const [distanceMode, setDistanceMode] = useState<'near' | 'medium' | 'far'>('medium');
@@ -88,6 +96,23 @@ export default function AudioTesterTool() {
   const [peakVolume, setPeakVolume] = useState(0);
   const [polyphonyLimit, setPolyphonyLimit] = useState(32);
   const [activeSFXCount, setActiveSFXCount] = useState(0);
+
+  // State: SFX Pagination
+  const [sfxCurrentPage, setSfxCurrentPage] = useState(1);
+  const sfxItemsPerPage = 9;
+
+  // Calculate SFX pagination
+  const sfxTotalPages = Math.ceil(sfxTracks.length / sfxItemsPerPage);
+  const sfxStartIndex = (sfxCurrentPage - 1) * sfxItemsPerPage;
+  const sfxEndIndex = sfxStartIndex + sfxItemsPerPage;
+  const sfxPaginatedTracks = sfxTracks.slice(sfxStartIndex, sfxEndIndex);
+
+  // Reset to page 1 when SFX tracks change significantly
+  useEffect(() => {
+    if (sfxCurrentPage > sfxTotalPages && sfxTotalPages > 0) {
+      setSfxCurrentPage(1);
+    }
+  }, [sfxTracks.length, sfxCurrentPage, sfxTotalPages]);
 
   // State: UI & Queue
   const [replacingBGM, setReplacingBGM] = useState(false);
@@ -124,20 +149,23 @@ export default function AudioTesterTool() {
         });
       }
       
-      if (winDialogue) {
-        const response = await fetch(winDialogue.url);
-        const blob = await response.blob();
-        await audioStorage.storeAudioFile({
-          id: 'winDialogue', // Fixed ID for Win Dialogue
-          fileName: winDialogue.fileName,
-          fileType: winDialogue.fileType,
-          fileSize: winDialogue.fileSize,
-          duration: winDialogue.duration,
-          sampleRate: winDialogue.sampleRate,
-          channels: winDialogue.channels,
-          createdAt: winDialogue.createdAt,
-          blob
-        });
+      // Save Win Dialogue tracks
+      if (winDialogueTracks.length > 0) {
+        await Promise.all(winDialogueTracks.map(async (track) => {
+          const response = await fetch(track.url);
+          const blob = await response.blob();
+          await audioStorage.storeAudioFile({
+            id: track.id,
+            fileName: track.fileName,
+            fileType: track.fileType,
+            fileSize: track.fileSize,
+            duration: track.duration,
+            sampleRate: track.sampleRate,
+            channels: track.channels,
+            createdAt: track.createdAt,
+            blob
+          });
+        }));
       }
       
       // Store SFX tracks in IndexedDB
@@ -179,16 +207,19 @@ export default function AudioTesterTool() {
         bgmLoop,
         bgmCurrentTime,
         bgmPlaying,
-        winDialogueVolume,
-        winDialogueLoop,
-        winDialogueCurrentTime,
-        winDialoguePlaying,
         sfxTracks: sfxTracks.map(sfx => ({
           id: sfx.id,
           volume: sfx.volume,
           loop: sfx.loop,
           currentTime: sfx.currentTime,
           isPlaying: sfx.isPlaying
+        })),
+        winDialogueTracks: winDialogueTracks.map(track => ({
+          id: track.id,
+          volume: track.volume,
+          loop: track.loop,
+          currentTime: track.currentTime,
+          isPlaying: track.isPlaying
         })),
         imageFitMode,
         imageOpacity,
@@ -201,7 +232,7 @@ export default function AudioTesterTool() {
     } catch (error) {
       console.error('Failed to save progress:', error);
     }
-  }, [bgm, bgmVolume, bgmLoop, bgmCurrentTime, bgmPlaying, winDialogue, winDialogueVolume, winDialogueLoop, winDialogueCurrentTime, winDialoguePlaying, sfxTracks, image, imageFitMode, imageOpacity, masterVolume]);
+  }, [bgm, bgmVolume, bgmLoop, bgmCurrentTime, bgmPlaying, winDialogueTracks, sfxTracks, image, imageFitMode, imageOpacity, masterVolume]);
 
   // Load progress from IndexedDB and localStorage
   const loadProgress = useCallback(async () => {
@@ -251,32 +282,6 @@ export default function AudioTesterTool() {
           setBgmLoop(settings.bgmLoop);
           setBgmCurrentTime(settings.bgmCurrentTime);
           setBgmPlaying(false); // Reset playing state on load
-        }
-      }
-      
-      // Restore Win Dialogue from IndexedDB
-      if (settings.winDialogueVolume !== undefined) {
-        const winDialogueData = await audioStorage.getAudioFile('winDialogue');
-        if (winDialogueData) {
-          console.log('Restoring Win Dialogue from IndexedDB:', winDialogueData.fileName);
-          const url = audioStorage.createBlobURL(winDialogueData.blob);
-          
-          const winDialogueFile: AudioFile = {
-            id: 'winDialogue', // Match the stored ID
-            fileName: winDialogueData.fileName,
-            url: url,
-            duration: winDialogueData.duration,
-            fileType: winDialogueData.fileType,
-            fileSize: winDialogueData.fileSize,
-            sampleRate: winDialogueData.sampleRate,
-            channels: winDialogueData.channels,
-            createdAt: winDialogueData.createdAt
-          };
-          setWinDialogue(winDialogueFile);
-          setWinDialogueVolume(settings.winDialogueVolume);
-          setWinDialogueLoop(settings.winDialogueLoop);
-          setWinDialogueCurrentTime(settings.winDialogueCurrentTime);
-          setWinDialoguePlaying(false); // Reset playing state on load
         }
       }
       
@@ -349,17 +354,6 @@ export default function AudioTesterTool() {
           bgmAudioEl.volume = bgmVolume * masterVolume;
           bgmAudioEl.loop = bgmLoop;
         }
-        
-        // Create Win Dialogue audio element if needed
-        if (winDialogue && !winDialogueAudioRef.current) {
-          console.log('Creating Win Dialogue audio element from IndexedDB');
-          const winDialogueAudioEl = new Audio(winDialogue.url);
-          winDialogueAudioEl.preload = 'auto';
-          winDialogueAudioEl.crossOrigin = 'anonymous';
-          winDialogueAudioRef.current = winDialogueAudioEl;
-          winDialogueAudioEl.volume = winDialogueVolume * masterVolume;
-          winDialogueAudioEl.loop = winDialogueLoop;
-        }
       }, 100);
       
     } catch (error) {
@@ -377,7 +371,7 @@ export default function AudioTesterTool() {
       
       // Clear all state
       setBgm(null);
-      setWinDialogue(null);
+      setWinDialogueTracks([]);
       setSfxTracks([]);
       setImage(null);
       
@@ -386,10 +380,6 @@ export default function AudioTesterTool() {
       setBgmLoop(false);
       setBgmCurrentTime(0);
       setBgmPlaying(false);
-      setWinDialogueVolume(1);
-      setWinDialogueLoop(false);
-      setWinDialogueCurrentTime(0);
-      setWinDialoguePlaying(false);
       setImageFitMode('contain');
       setImageOpacity(1);
       setMasterVolume(1);
@@ -397,7 +387,7 @@ export default function AudioTesterTool() {
       // Clear audio refs
       sfxAudioRefs.current.clear();
       bgmAudioRef.current = null;
-      winDialogueAudioRef.current = null;
+      winDialogueAudioRefs.current.clear();
       
       toast({ title: 'Progress cleared', description: 'All saved data has been removed' });
     } catch (error) {
@@ -412,7 +402,7 @@ export default function AudioTesterTool() {
       saveProgress();
     }, 500); // Debounce 500ms
     return () => clearTimeout(timeoutId);
-  }, [bgm, bgmVolume, bgmLoop, bgmCurrentTime, bgmPlaying, winDialogue, winDialogueVolume, winDialogueLoop, winDialogueCurrentTime, winDialoguePlaying, sfxTracks, image, imageFitMode, imageOpacity, masterVolume]);
+  }, [bgm, bgmVolume, bgmLoop, bgmCurrentTime, bgmPlaying, winDialogueTracks, sfxTracks, image, imageFitMode, imageOpacity, masterVolume]);
 
   // Load progress on mount
   useEffect(() => {
@@ -441,7 +431,7 @@ export default function AudioTesterTool() {
   useEffect(() => {
     return () => {
       if (bgm) deleteAudioFile(bgm);
-      if (winDialogue) deleteAudioFile(winDialogue);
+      winDialogueTracks.forEach((track) => deleteAudioFile(track));
       sfxTracks.forEach((sfx) => deleteAudioFile(sfx));
       if (image) deleteImageFile(image);
     };
@@ -455,14 +445,14 @@ export default function AudioTesterTool() {
     const t = toast({ title: 'Uploading BGM', description: file.name });
     setReplacingBGM(true);
     try {
-      const audioFile = await uploadAudioFile(file);
+      const audioFile = await uploadAudioFile(file, 'bgm');
       setBgm(audioFile);
       setBgmCurrentTime(0);
       setBgmPlaying(false);
-      t.update({ title: 'BGM uploaded', description: file.name });
+      t.update({ id: t.id, title: 'BGM uploaded', description: file.name });
     } catch (error: any) {
       console.error('BGM upload failed:', error);
-      t.update({ title: 'BGM upload failed', description: String(error?.message || error) });
+      t.update({ id: t.id, title: 'BGM upload failed', description: String(error?.message || error) });
     } finally {
       setReplacingBGM(false);
     }
@@ -478,7 +468,7 @@ export default function AudioTesterTool() {
       if (!file || !bgm) return;
       setReplacingBGM(true);
       try {
-        const newFile = await replaceAudioFile(bgm, file);
+        const newFile = await replaceAudioFile(bgm, file, 'bgm');
         setBgm(newFile);
         setBgmCurrentTime(0);
         setBgmPlaying(false);
@@ -496,36 +486,53 @@ export default function AudioTesterTool() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Check if we've reached the 8 file limit
+    if (winDialogueTracks.length >= 8) {
+      toast({ 
+        title: 'Upload failed', 
+        description: 'Maximum 8 Win Dialogue files allowed' 
+      });
+      return;
+    }
+
     const t = toast({ title: 'Uploading Win Dialogue', description: file.name });
     setReplacingWinDialogue(true);
     try {
-      const audioFile = await uploadAudioFile(file);
-      setWinDialogue(audioFile);
-      setWinDialogueCurrentTime(0);
-      setWinDialoguePlaying(false);
-      t.update({ title: 'Win Dialogue uploaded', description: file.name });
+      console.log('Starting Win Dialogue upload for file:', file.name, file.size, file.type);
+      const audioFile = await uploadAudioFile(file, 'sfx');
+      console.log('Win Dialogue upload successful, audioFile:', audioFile);
+      const winDialogueTrack: WinDialogueTrack = {
+        ...audioFile,
+        volume: 1,
+        isPlaying: false,
+        currentTime: 0,
+        loop: false,
+      };
+      setWinDialogueTracks((prev) => [...prev, winDialogueTrack]);
+      t.update({ id: t.id, title: 'Win Dialogue uploaded', description: file.name });
     } catch (error: any) {
       console.error('Win Dialogue upload failed:', error);
-      t.update({ title: 'Win Dialogue upload failed', description: String(error?.message || error) });
+      console.error('Error details:', JSON.stringify(error, null, 2));
+      t.update({ id: t.id, title: 'Win Dialogue upload failed', description: String(error?.message || error) });
     } finally {
       setReplacingWinDialogue(false);
     }
   };
 
   // Win Dialogue Replace
-  const handleWinDialogueReplace = () => {
+  const handleWinDialogueReplace = (trackId: string) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'audio/*';
     input.onchange = async (e: any) => {
       const file = e.target.files?.[0];
-      if (!file || !winDialogue) return;
+      if (!file) return;
       setReplacingWinDialogue(true);
       try {
-        const newFile = await replaceAudioFile(winDialogue, file);
-        setWinDialogue(newFile);
-        setWinDialogueCurrentTime(0);
-        setWinDialoguePlaying(false);
+        const track = winDialogueTracks.find(t => t.id === trackId);
+        if (!track) return;
+        const newFile = await replaceAudioFile(track, file, 'sfx');
+        setWinDialogueTracks(prev => prev.map(t => t.id === trackId ? { ...newFile, volume: t.volume, isPlaying: t.isPlaying, currentTime: t.currentTime, loop: t.loop } : t));
       } catch (error) {
         console.error('Win Dialogue replace failed:', error);
       } finally {
@@ -542,7 +549,7 @@ export default function AudioTesterTool() {
 
     const t = toast({ title: 'Uploading SFX', description: file.name });
     try {
-      const audioFile = await uploadAudioFile(file);
+      const audioFile = await uploadAudioFile(file, 'sfx');
       const sfxTrack: SFXTrack = {
         ...audioFile,
         volume: 1,
@@ -551,10 +558,10 @@ export default function AudioTesterTool() {
         loop: false,
       };
       setSfxTracks((prev) => [...prev, sfxTrack]);
-      t.update({ title: 'SFX uploaded', description: file.name });
+      t.update({ id: t.id, title: 'SFX uploaded', description: file.name });
     } catch (error: any) {
       console.error('SFX upload failed:', error);
-      t.update({ title: 'SFX upload failed', description: String(error?.message || error) });
+      t.update({ id: t.id, title: 'SFX upload failed', description: String(error?.message || error) });
     }
   };
 
@@ -644,7 +651,7 @@ export default function AudioTesterTool() {
     // Upload all files in parallel
     const uploadPromises = audioFiles.map(async (file) => {
       try {
-        const audioFile = await uploadAudioFile(file);
+        const audioFile = await uploadAudioFile(file, 'sfx');
         const sfxTrack: SFXTrack = {
           ...audioFile,
           volume: 1,
@@ -663,7 +670,7 @@ export default function AudioTesterTool() {
     const successful = results.filter((r): r is SFXTrack => r !== null);
     
     setSfxTracks((prev) => [...prev, ...successful]);
-    t.update({ title: 'SFX batch uploaded', description: `${successful.length} files added` });
+    t.update({ id: t.id, title: 'SFX batch uploaded', description: `${successful.length} files added` });
   };
 
   // BGM Drag-and-Drop Upload
@@ -692,7 +699,7 @@ export default function AudioTesterTool() {
     const file = audioFiles[0];
     setReplacingBGM(true);
     try {
-      const audioFile = await uploadAudioFile(file);
+      const audioFile = await uploadAudioFile(file, 'bgm');
       if (bgm) deleteAudioFile(bgm);
       setBgm(audioFile);
       setBgmPlaying(false);
@@ -724,23 +731,57 @@ export default function AudioTesterTool() {
     e.stopPropagation();
     e.currentTarget.style.backgroundColor = 'transparent';
 
-    const audioFiles = await extractAudioFilesFromDataTransfer(e.dataTransfer);
-    
-    if (audioFiles.length === 0) return;
-    
-    // Take the first audio file for Win Dialogue
-    const file = audioFiles[0];
-    setReplacingWinDialogue(true);
     try {
-      const audioFile = await uploadAudioFile(file);
-      if (winDialogue) deleteAudioFile(winDialogue);
-      setWinDialogue(audioFile);
-      setWinDialoguePlaying(false);
-      setWinDialogueCurrentTime(0);
-      toast({ title: 'Win Dialogue uploaded', description: file.name });
+      const audioFiles = await extractAudioFilesFromDataTransfer(e.dataTransfer);
+      
+      if (audioFiles.length === 0) {
+        toast({ title: 'Invalid files', description: 'No audio files found' });
+        return;
+      }
+      
+      // Check if adding these files would exceed the 8 file limit
+      const availableSlots = 8 - winDialogueTracks.length;
+      const filesToProcess = audioFiles.slice(0, availableSlots);
+      
+      if (filesToProcess.length === 0) {
+        toast({ 
+          title: 'Upload failed', 
+          description: 'Maximum 8 Win Dialogue files allowed' 
+        });
+        return;
+      }
+      
+      if (audioFiles.length > availableSlots) {
+        toast({ 
+          title: 'Limited upload', 
+          description: `Only first ${availableSlots} files will be uploaded (8 file limit)` 
+        });
+      }
+      
+      setReplacingWinDialogue(true);
+      
+      // Process each file
+      for (const file of filesToProcess) {
+        try {
+          const audioFile = await uploadAudioFile(file, 'sfx');
+          const winDialogueTrack: WinDialogueTrack = {
+            ...audioFile,
+            volume: 1,
+            isPlaying: false,
+            currentTime: 0,
+            loop: false,
+          };
+          setWinDialogueTracks(prev => [...prev, winDialogueTrack]);
+        } catch (error: any) {
+          console.error(`Win Dialogue upload failed for ${file.name}:`, error);
+          toast({ title: 'Upload failed', description: `Failed to upload ${file.name}` });
+        }
+      }
+      
+      toast({ title: 'Win Dialogue uploaded', description: `${filesToProcess.length} files added` });
     } catch (error: any) {
       console.error('Win Dialogue upload failed:', error);
-      toast({ title: 'Win Dialogue upload failed', description: String(error?.message || error) });
+      toast({ title: 'Upload failed', description: String(error?.message || error) });
     } finally {
       setReplacingWinDialogue(false);
     }
@@ -756,7 +797,7 @@ export default function AudioTesterTool() {
       try {
         const sfxTrack = sfxTracks.find((t) => t.id === sfxId);
         if (!sfxTrack) return;
-        const newFile = await replaceAudioFile(sfxTrack, file);
+        const newFile = await replaceAudioFile(sfxTrack, file, 'sfx');
         setSfxTracks((prev) =>
           prev.map((t) =>
             t.id === sfxId
@@ -796,10 +837,10 @@ export default function AudioTesterTool() {
     try {
       const imageFile = await uploadImageFile(file);
       setImage(imageFile);
-      t.update({ title: 'Image uploaded', description: file.name });
+      t.update({ id: t.id, title: 'Image uploaded', description: file.name });
     } catch (error: any) {
       console.error('Image upload failed:', error);
-      t.update({ title: 'Image upload failed', description: String(error?.message || error) });
+      t.update({ id: t.id, title: 'Image upload failed', description: String(error?.message || error) });
     }
   };
 
@@ -923,46 +964,165 @@ export default function AudioTesterTool() {
     }, fadeInterval);
   }, [bgmPlaying, masterVolume]);
 
+  // Win Dialogue-specific BGM fade functions (50% over 5 seconds)
+  const fadeOutBGMForWinDialogue = useCallback(() => {
+    if (!bgmAudioRef.current || bgmVolume === 0) return;
+    
+    // Clear any existing fade interval
+    if (bgmFadeIntervalRef.current) {
+      clearInterval(bgmFadeIntervalRef.current);
+    }
+    
+    // Set fade status
+    setBgmFadeStatus('fading-out');
+    
+    // Store original volume if not already stored
+    if (originalBGMVolumeRef.current === 0) {
+      originalBGMVolumeRef.current = bgmVolume;
+    }
+    
+    const fadeDuration = 5000; // 5 seconds
+    const fadeSteps = 50; // 50 steps for smooth fade
+    const fadeInterval = fadeDuration / fadeSteps;
+    const targetVolume = originalBGMVolumeRef.current * 0.5; // 50% of original
+    const volumeDifference = bgmAudioRef.current.volume / masterVolume - targetVolume;
+    const volumeStep = volumeDifference / fadeSteps;
+    let currentStep = 0;
+    
+    bgmFadeIntervalRef.current = setInterval(() => {
+      currentStep++;
+      const newVolume = Math.max(targetVolume, (bgmAudioRef.current!.volume / masterVolume) - volumeStep);
+      
+      if (bgmAudioRef.current) {
+        bgmAudioRef.current.volume = newVolume * masterVolume;
+        // Update effective volume display
+        setBgmEffectiveVolume(newVolume);
+      }
+      
+      if (currentStep >= fadeSteps || newVolume <= targetVolume) {
+        if (bgmFadeIntervalRef.current) {
+          clearInterval(bgmFadeIntervalRef.current);
+          bgmFadeIntervalRef.current = null;
+        }
+        if (bgmAudioRef.current) {
+          bgmAudioRef.current.volume = targetVolume * masterVolume;
+          setBgmEffectiveVolume(targetVolume);
+        }
+        setBgmFadeStatus('faded'); // Set to faded when complete
+      }
+    }, fadeInterval);
+  }, [bgmVolume, masterVolume]);
+  
+  const fadeInBGMFromWinDialogue = useCallback(() => {
+    if (!bgmAudioRef.current || !bgmPlaying) return;
+    
+    // Clear any existing fade interval
+    if (bgmFadeIntervalRef.current) {
+      clearInterval(bgmFadeIntervalRef.current);
+    }
+    
+    const targetVolume = originalBGMVolumeRef.current;
+    const currentVolume = bgmAudioRef.current.volume / masterVolume;
+    
+    // Only fade if we're currently at 50% or less
+    if (currentVolume >= targetVolume * 0.9) {
+      setBgmFadeStatus('normal'); // Already at or near full volume
+      setBgmEffectiveVolume(targetVolume);
+      return; 
+    }
+    
+    // Set fade status
+    setBgmFadeStatus('fading-in');
+    
+    const fadeDuration = 5000; // 5 seconds
+    const fadeSteps = 50; // 50 steps for smooth fade
+    const fadeInterval = fadeDuration / fadeSteps;
+    const volumeDifference = targetVolume - currentVolume;
+    const volumeStep = volumeDifference / fadeSteps;
+    let currentStep = 0;
+    
+    bgmFadeIntervalRef.current = setInterval(() => {
+      currentStep++;
+      const newVolume = Math.min(targetVolume, currentVolume + (volumeStep * currentStep));
+      
+      if (bgmAudioRef.current) {
+        bgmAudioRef.current.volume = newVolume * masterVolume;
+        // Update effective volume display
+        setBgmEffectiveVolume(newVolume);
+      }
+      
+      if (currentStep >= fadeSteps || newVolume >= targetVolume) {
+        if (bgmFadeIntervalRef.current) {
+          clearInterval(bgmFadeIntervalRef.current);
+          bgmFadeIntervalRef.current = null;
+        }
+        if (bgmAudioRef.current) {
+          bgmAudioRef.current.volume = targetVolume * masterVolume;
+          setBgmEffectiveVolume(targetVolume);
+        }
+        // Reset original volume reference and status
+        originalBGMVolumeRef.current = targetVolume;
+        setBgmFadeStatus('normal');
+      }
+    }, fadeInterval);
+  }, [bgmPlaying, masterVolume]);
+
   // Win Dialogue Playback
-  const toggleWinDialoguePlayback = () => {
-    if (!winDialogue || !winDialogueAudioRef.current) return;
-    if (winDialoguePlaying) {
+  const toggleWinDialoguePlayback = (trackId: string) => {
+    const track = winDialogueTracks.find(t => t.id === trackId);
+    const audioRef = winDialogueAudioRefs.current.get(trackId);
+    
+    if (!track || !audioRef) return;
+    
+    if (track.isPlaying) {
       // Stop Win Dialogue and fade BGM back in
-      winDialogueAudioRef.current.pause();
-      setWinDialoguePlaying(false);
-      fadeInBGM(); // Fade BGM back in
+      audioRef.pause();
+      setWinDialogueTracks(prev => prev.map(t => 
+        t.id === trackId ? { ...t, isPlaying: false } : t
+      ));
+      fadeInBGMFromWinDialogue(); // Fade BGM back in from 50%
     } else {
-      // Start Win Dialogue and fade BGM out
-      fadeOutBGM(); // Fade BGM out first
-      winDialogueAudioRef.current.play();
-      setWinDialoguePlaying(true);
+      // Start Win Dialogue and fade BGM out to 50%
+      fadeOutBGMForWinDialogue(); // Fade BGM to 50% over 5 seconds
+      audioRef.play();
+      setWinDialogueTracks(prev => prev.map(t => 
+        t.id === trackId ? { ...t, isPlaying: true } : t
+      ));
       
       // Set up ended event to fade BGM back in when Win Dialogue finishes
       const handleWinDialogueEnded = () => {
-        setWinDialoguePlaying(false);
-        fadeInBGM(); // Fade BGM back in
-        winDialogueAudioRef.current?.removeEventListener('ended', handleWinDialogueEnded);
+        setWinDialogueTracks(prev => prev.map(t => 
+          t.id === trackId ? { ...t, isPlaying: false } : t
+        ));
+        fadeInBGMFromWinDialogue(); // Fade BGM back in from 50%
+        audioRef.removeEventListener('ended', handleWinDialogueEnded);
       };
       
-      winDialogueAudioRef.current.addEventListener('ended', handleWinDialogueEnded);
+      audioRef.addEventListener('ended', handleWinDialogueEnded);
     }
   };
 
-  const stopWinDialogue = () => {
-    if (!winDialogueAudioRef.current) return;
-    winDialogueAudioRef.current.pause();
-    winDialogueAudioRef.current.currentTime = 0;
-    setWinDialoguePlaying(false);
-    setWinDialogueCurrentTime(0);
-    fadeInBGM(); // Fade BGM back in when stopped
+  const stopWinDialogue = (trackId: string) => {
+    const audioRef = winDialogueAudioRefs.current.get(trackId);
+    if (!audioRef) return;
+    audioRef.pause();
+    audioRef.currentTime = 0;
+    setWinDialogueTracks(prev => prev.map(t => 
+      t.id === trackId ? { ...t, isPlaying: false, currentTime: 0 } : t
+    ));
+    fadeInBGMFromWinDialogue(); // Fade BGM back in from 50% when stopped
   };
 
-  const restartWinDialogue = () => {
-    if (!winDialogueAudioRef.current) return;
-    winDialogueAudioRef.current.currentTime = 0;
-    setWinDialogueCurrentTime(0);
-    if (winDialoguePlaying) {
-      winDialogueAudioRef.current.play();
+  const restartWinDialogue = (trackId: string) => {
+    const track = winDialogueTracks.find(t => t.id === trackId);
+    const audioRef = winDialogueAudioRefs.current.get(trackId);
+    if (!audioRef || !track) return;
+    audioRef.currentTime = 0;
+    setWinDialogueTracks(prev => prev.map(t => 
+      t.id === trackId ? { ...t, currentTime: 0 } : t
+    ));
+    if (track.isPlaying) {
+      audioRef.play();
     }
   };
 
@@ -971,126 +1131,159 @@ export default function AudioTesterTool() {
     loadProgress();
   }, []);
 
-  // Accepts optional onEnded callback so callers (e.g. queue) can mark completion.
-  const playSFX = useCallback((sfxId: string, onEnded?: () => void) => {
-    // Get or create audio element for this SFX
-    let audioEl = sfxAudioRefs.current.get(sfxId);
-    const sfxTrack = sfxTracks.find((t) => t.id === sfxId);
-    if (!sfxTrack) return;
+  // Store event handlers to properly remove them later
+  const sfxEventHandlers = useRef(new Map<string, {
+    handleEnded: () => void;
+    handleTimeUpdate: () => void;
+    handleError: (e: Event) => void;
+    handlePlaying: () => void;
+    handlePause: () => void;
+  }>());
 
-    // If audio element exists, stop it immediately and reset to beginning
-    if (audioEl) {
-      // Stop current playback immediately
-      audioEl.pause();
-      audioEl.currentTime = 0; // Reset to beginning
-      
-      // Remove old event listeners to prevent stacking
-      const newAudioEl = new Audio(sfxTrack.url);
-      newAudioEl.preload = 'auto';
-      newAudioEl.crossOrigin = 'anonymous';
-      
-      // Replace the old audio element with fresh one
-      sfxAudioRefs.current.set(sfxId, newAudioEl);
-      audioEl = newAudioEl;
-    } else {
-      // Create fresh audio element
+  // Used to cancel in-flight play() calls when users spam play/stop.
+  // Token increments invalidate any previous async play attempt.
+  const sfxPlaybackTokenRef = useRef(new Map<string, number>());
+
+  const bumpSfxToken = (sfxId: string) => {
+    const next = (sfxPlaybackTokenRef.current.get(sfxId) ?? 0) + 1;
+    sfxPlaybackTokenRef.current.set(sfxId, next);
+    return next;
+  };
+
+  // Keep this derived so it never drifts when users spam controls.
+  useEffect(() => {
+    setActiveSFXCount(sfxTracks.filter(t => t.isPlaying).length);
+  }, [sfxTracks]);
+
+  // Perfectly spammable SFX playback system with proper cleanup
+  const playSFX = useCallback((sfxId: string, onEnded?: () => void) => {
+    const sfxTrack = sfxTracks.find((t) => t.id === sfxId);
+    if (!sfxTrack) {
+      console.warn('[playSFX] SFX track not found:', sfxId);
+      return;
+    }
+
+    // Invalidate any previous play attempt for this SFX
+    const token = bumpSfxToken(sfxId);
+
+    // Ensure we reuse the same audio element per SFX id
+    let audioEl = sfxAudioRefs.current.get(sfxId);
+    if (!audioEl) {
       audioEl = new Audio(sfxTrack.url);
       audioEl.preload = 'auto';
       audioEl.crossOrigin = 'anonymous';
       sfxAudioRefs.current.set(sfxId, audioEl);
+
+      const newHandlers = {
+        handleEnded: () => {
+          setSfxTracks((prev) =>
+            prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
+          );
+          try {
+            onEnded?.();
+          } catch (err) {
+            console.error('[playSFX] onEnded handler error:', err);
+          }
+        },
+        handleTimeUpdate: () => {
+          const ct = audioEl!.currentTime || 0;
+          setSfxTracks((prev) => prev.map((t) => (t.id === sfxId ? { ...t, currentTime: ct } : t)));
+        },
+        handleError: (e: Event) => {
+          console.error('[playSFX] audio element error', e);
+          setSfxTracks((prev) =>
+            prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
+          );
+        },
+        handlePlaying: () => {
+          setSfxTracks((prev) =>
+            prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: true } : t))
+          );
+        },
+        handlePause: () => {
+          setSfxTracks((prev) =>
+            prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
+          );
+        },
+      };
+
+      sfxEventHandlers.current.set(sfxId, newHandlers);
+      audioEl.addEventListener('ended', newHandlers.handleEnded);
+      audioEl.addEventListener('timeupdate', newHandlers.handleTimeUpdate);
+      audioEl.addEventListener('error', newHandlers.handleError);
+      audioEl.addEventListener('playing', newHandlers.handlePlaying);
+      audioEl.addEventListener('pause', newHandlers.handlePause);
+    } else if (audioEl.src !== sfxTrack.url) {
+      audioEl.src = sfxTrack.url;
     }
 
-    // Track when sound ends for UI updates
-    audioEl.addEventListener('ended', () => {
-      setSfxTracks((prev) =>
-        prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
-      );
-      setActiveSFXCount((prev) => Math.max(0, prev - 1));
-      try {
-        onEnded?.();
-      } catch (err) {
-        console.error('[playSFX] onEnded handler error:', err);
-      }
-    });
-
-    // Keep UI in sync: update currentTime on timeupdate events for precise seconds display
-    audioEl.addEventListener('timeupdate', () => {
-      const ct = audioEl!.currentTime || 0;
-      setSfxTracks((prev) => prev.map((t) => (t.id === sfxId ? { ...t, currentTime: ct } : t)));
-    });
-
-    audioEl.addEventListener('error', (e) => {
-      console.error('[playSFX] audio element error', e);
-      setSfxTracks((prev) =>
-        prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
-      );
-    });
-
-    audioEl.addEventListener('playing', () => {
-      setSfxTracks((prev) =>
-        prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: true } : t))
-      );
-    });
-
-    audioEl.addEventListener('pause', () => {
-      setSfxTracks((prev) =>
-        prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
-      );
-    });
-
-    // Ensure audio uses current track volume/loop settings
+    // Hard stop current playback before restarting (prevents stacking)
+    audioEl.pause();
+    try {
+      audioEl.currentTime = 0;
+    } catch {
+      // ignore
+    }
     audioEl.volume = sfxTrack.volume * masterVolume;
     audioEl.loop = sfxTrack.loop;
 
-    // Trigger playback immediately from the beginning
+    // Update UI immediately to reflect restart
+    setSfxTracks((prev) =>
+      prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: true, currentTime: 0 } : t))
+    );
+
     const playPromise = audioEl.play();
     if (playPromise) {
-      playPromise.catch((error) => {
-        console.error('[v0] SFX playback failed:', error);
-      });
+      playPromise
+        .then(() => {
+          // If user pressed stop/play again while play() was pending, cancel this start.
+          if ((sfxPlaybackTokenRef.current.get(sfxId) ?? 0) !== token) {
+            audioEl!.pause();
+            try {
+              audioEl!.currentTime = 0;
+            } catch {
+              // ignore
+            }
+          }
+        })
+        .catch((error) => {
+          console.error('[playSFX] playback failed:', error);
+          if ((sfxPlaybackTokenRef.current.get(sfxId) ?? 0) === token) {
+            setSfxTracks((prev) =>
+              prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false } : t))
+            );
+          }
+        });
     }
-
-    // Update UI state (playing state will also be kept in sync via events)
-    setSfxTracks((prev) =>
-      prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: true } : t))
-    );
-    setActiveSFXCount((prev) => prev + 1);
   }, [sfxTracks, masterVolume]);
 
   const pauseSFX = (sfxId: string) => {
     const audioEl = sfxAudioRefs.current.get(sfxId);
     if (audioEl) {
+      bumpSfxToken(sfxId);
       audioEl.pause();
       const ct = audioEl.currentTime || 0;
       setSfxTracks((prev) =>
         prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false, currentTime: ct } : t))
       );
-      setActiveSFXCount((prev) => Math.max(0, prev - 1));
     }
   };
 
   const stopSFX = (sfxId: string) => {
     const audioEl = sfxAudioRefs.current.get(sfxId);
     if (audioEl) {
+      bumpSfxToken(sfxId);
       audioEl.pause();
       audioEl.currentTime = 0;
       setSfxTracks((prev) =>
         prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false, currentTime: 0 } : t))
       );
-      setActiveSFXCount((prev) => Math.max(0, prev - 1));
     }
   };
 
   const restartSFX = (sfxId: string) => {
-    const audioEl = sfxAudioRefs.current.get(sfxId);
-    if (audioEl) {
-      audioEl.currentTime = 0;
-      setSfxTracks((prev) =>
-        prev.map((t) => (t.id === sfxId ? { ...t, currentTime: 0 } : t))
-      );
-      const p = audioEl.play();
-      if (p) p.catch((err) => console.error('[restartSFX] play failed:', err));
-    }
+    // Restart should behave like a spammable play: immediately restart from 0.
+    playSFX(sfxId);
   };
 
   const seekSFX = (sfxId: string, time: number) => {
@@ -1103,12 +1296,58 @@ export default function AudioTesterTool() {
     }
   };
 
+  // Ultra-reliable stop function with proper cleanup
+  const forceStopSFX = (sfxId: string) => {
+    // Get the audio element and its handlers
+    const audioEl = sfxAudioRefs.current.get(sfxId);
+    const handlers = sfxEventHandlers.current.get(sfxId);
+
+    // Cancel any pending play() that may still resolve after we stop
+    bumpSfxToken(sfxId);
+    
+    if (audioEl) {
+      try {
+        // Stop immediately. We intentionally keep the audio element (and listeners)
+        // so repeated play is instant and UI events keep working.
+        audioEl.pause();
+        try {
+          audioEl.currentTime = 0;
+        } catch {
+          // ignore
+        }
+        // keep volume/loop as configured; stop should not mutate settings
+        
+      } catch (error) {
+        console.error('[forceStopSFX] Error stopping audio:', error);
+      }
+    }
+    
+    // Note: keep references so next play is immediate.
+    // We only clear refs on delete/replace.
+    
+    // Always update UI state immediately
+    setSfxTracks((prev) =>
+      prev.map((t) => (t.id === sfxId ? { ...t, isPlaying: false, currentTime: 0 } : t))
+    );
+  };
+
   const toggleSection = (section: keyof typeof expandedSections) => {
     setExpandedSections((prev) => ({
       ...prev,
       [section]: !prev[section],
     }));
   };
+
+  const stopAllSFX = useCallback(() => {
+    if (sfxTracks.length === 0) return;
+    
+    // Stop all currently playing SFX
+    sfxTracks.forEach((sfx) => {
+      if (sfx.isPlaying) {
+        forceStopSFX(sfx.id);
+      }
+    });
+  }, [sfxTracks]);
 
   const playAllSFX = useCallback(() => {
     if (sfxTracks.length === 0) return;
@@ -1121,44 +1360,203 @@ export default function AudioTesterTool() {
   }, [sfxTracks]);
 
   return (
-    <div id="main" className="min-h-screen bg-background text-foreground dark">
-      {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur">
-        <div className="max-w-full px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <img src="/Image/Dijoker.svg" alt="DiJoker logo" className="w-70 h-22 rounded-md" />
-              <div>
-                <p className="text-sm text-muted-foreground mt-1"></p>
+    <Layout>
+      <div id="main" className="min-h-screen bg-background text-foreground">
+        {/* Header */}
+        <header className="border-b border-border bg-card/50 backdrop-blur">
+          <div className="max-w-full px-6 py-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <img src="/Image/Dijoker.svg" alt="DiJoker logo" className="w-70 h-22 rounded-md" />
+                <div>
+                  <p className="text-sm text-muted-foreground mt-1"></p>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <span className="hidden sm:inline">Auto-save enabled</span>
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                </div>
               </div>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <span className="hidden sm:inline">Auto-save enabled</span>
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={clearProgress}
+                  className="flex items-center justify-center gap-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-medium text-sm transition-colors"
+                  title="Clear all saved progress"
+                >
+                  <Trash2 size={14} />
+                  Clear Progress
+                </button>
               </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={clearProgress}
-                className="flex items-center justify-center gap-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-medium text-sm transition-colors"
-                title="Clear all saved progress"
-              >
-                <Trash2 size={14} />
-                Clear Progress
-              </button>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* Main Layout: Fixed Structure as Required */}
-      {/* Top Row: BGM | SFX | Reference Image */}
-      {/* Bottom Row: Audio Effects | Master Control */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 p-6 max-w-full">
-        
-        {/* Top Left: BGM (1 column) */}
-        <div className="lg:col-span-1 space-y-6 min-h-fit">
+      {/* Main Layout: Single Container */}
+      <div className="p-6 max-w-full">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_300px] gap-6">
           
-          {/* BGM Section */}
+          {/* Left: SFX Controllers */}
+          <div className="space-y-6">
+            <section className="rounded-lg border border-border bg-card/30 overflow-hidden">
+              <div className="flex items-center justify-between p-4 border-b border-border">
+                <h2 className="font-semibold flex items-center gap-2">
+                  <Zap size={18} className="text-primary" />
+                  Sound Effects ({sfxTracks.length})
+                  <span className="text-sm text-muted-foreground ml-3">Active SFX {activeSFXCount} of {polyphonyLimit}</span>
+                </h2>
+                <div className="flex gap-2">
+                  {sfxTracks.length > 0 && (
+                    <>
+                      <button
+                        onClick={playAllSFX}
+                        className="flex items-center justify-center gap-1 px-3 py-2 bg-green-600 hover:bg-green-500 text-white rounded font-medium text-sm transition-colors"
+                        title="Play all SFX simultaneously"
+                      >
+                        <Play size={16} />
+                        Play All
+                      </button>
+                      <button
+                        onClick={stopAllSFX}
+                        className="flex items-center justify-center gap-1 px-3 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-medium text-sm transition-colors"
+                        title="Stop all playing SFX"
+                      >
+                        <Square size={16} />
+                        Stop All
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={() => {
+                      const input = document.createElement('input');
+                      input.type = 'file';
+                      input.accept = 'audio/*';
+                      input.onchange = (e) => {
+                        const target = e.target as HTMLInputElement;
+                        handleSFXUpload({ target } as React.ChangeEvent<HTMLInputElement>);
+                      };
+                      input.click();
+                    }}
+                  className="flex items-center justify-center gap-1 px-3 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded font-medium text-sm transition-colors"
+                >
+                  <Plus size={16} />
+                  Add SFX
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4">
+              {sfxTracks.length === 0 ? (
+                <div
+                  onDragOver={handleSFXDragOver}
+                  onDragLeave={handleSFXDragLeave}
+                  onDrop={handleSFXDrop}
+                  onClick={() => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = 'audio/*';
+                    input.onchange = (e) => {
+                      const target = e.target as HTMLInputElement;
+                      handleSFXUpload({ target } as React.ChangeEvent<HTMLInputElement>);
+                    };
+                    input.click();
+                  }}
+                  className="text-center py-8 text-muted-foreground border-2 border-dashed border-border rounded-lg transition-colors cursor-pointer hover:bg-card/50"
+                >
+                  <Zap size={32} className="mx-auto mb-3 opacity-50" />
+                  <p className="text-sm font-medium">Click to browse or drag audio files here</p>
+                  <p className="text-xs text-muted-foreground mt-1">Supports WAV, MP3, OGG, AAC, FLAC and folders</p>
+                </div>
+              ) : (
+                <>
+                  <div
+                    onDragOver={handleSFXDragOver}
+                    onDragLeave={handleSFXDragLeave}
+                    onDrop={handleSFXDrop}
+                    className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 transition-colors rounded-lg p-4 -m-4"
+                  >
+                    {sfxPaginatedTracks.map((sfx) => (
+                      <SFXController
+                        key={sfx.id}
+                        sfxId={sfx.id}
+                        fileName={sfx.fileName}
+                        duration={sfx.duration}
+                        audioRef={React.createRef()}
+                        volume={sfx.volume}
+                        loop={sfx.loop}
+                        isPlaying={sfx.isPlaying}
+                        currentTime={sfx.currentTime}
+                        onVolumeChange={(vol) => {
+                          setSfxTracks((prev) =>
+                            prev.map((t) => (t.id === sfx.id ? { ...t, volume: vol } : t))
+                          );
+                          const audioEl = sfxAudioRefs.current.get(sfx.id);
+                          if (audioEl) audioEl.volume = vol * masterVolume;
+                        }}
+                        onLoopToggle={(loop) => {
+                          setSfxTracks((prev) =>
+                            prev.map((t) => (t.id === sfx.id ? { ...t, loop } : t))
+                          );
+                          const audioEl = sfxAudioRefs.current.get(sfx.id);
+                          if (audioEl) audioEl.loop = loop;
+                        }}
+                        onPlay={() => playSFX(sfx.id)}
+                        onPause={() => pauseSFX(sfx.id)}
+                        onStop={() => forceStopSFX(sfx.id)}
+                        onRestart={() => restartSFX(sfx.id)}
+                        onReplace={() => handleSFXReplace(sfx.id)}
+                        onDelete={() => handleSFXDelete(sfx.id)}
+                        onSeek={(time) => seekSFX(sfx.id, time)}
+                        isReplacing={replacingSFXId === sfx.id}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Pagination Controls */}
+                  {sfxTotalPages > 1 && (
+                    <div className="flex items-center justify-center gap-2 mt-6 pt-4 border-t border-border">
+                      <button
+                        onClick={() => setSfxCurrentPage(prev => Math.max(1, prev - 1))}
+                        disabled={sfxCurrentPage === 1}
+                        className="px-3 py-1 text-sm bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors"
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: sfxTotalPages }, (_, i) => i + 1).map(page => (
+                          <button
+                            key={page}
+                            onClick={() => setSfxCurrentPage(page)}
+                            className={`px-3 py-1 text-sm rounded transition-colors ${
+                              sfxCurrentPage === page
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted hover:bg-muted/80'
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        ))}
+                      </div>
+                      
+                      <button
+                        onClick={() => setSfxCurrentPage(prev => Math.min(sfxTotalPages, prev + 1))}
+                        disabled={sfxCurrentPage === sfxTotalPages}
+                        className="px-3 py-1 text-sm bg-muted hover:bg-muted/80 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors"
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Page Info */}
+                  <div className="text-center text-xs text-muted-foreground mt-2">
+                    Showing {sfxStartIndex + 1}-{Math.min(sfxEndIndex, sfxTracks.length)} of {sfxTracks.length} SFX files
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+
+          {/* BGM Section at bottom of left column */}
           <section className="rounded-lg border border-border bg-card/30 overflow-hidden">
             <button
               onClick={() => toggleSection('bgm')}
@@ -1182,7 +1580,10 @@ export default function AudioTesterTool() {
                       const input = document.createElement('input');
                       input.type = 'file';
                       input.accept = 'audio/*';
-                      input.onchange = handleBGMUpload;
+                      input.onchange = (e) => {
+                        const target = e.target as HTMLInputElement;
+                        handleBGMUpload({ target } as React.ChangeEvent<HTMLInputElement>);
+                      };
                       input.click();
                     }}
                     className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-border rounded-lg cursor-pointer hover:bg-card/50 transition-colors"
@@ -1191,57 +1592,71 @@ export default function AudioTesterTool() {
                     <span className="text-sm text-muted-foreground">Upload BGM audio file or drag folder</span>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">File: {bgm.fileName}</p>
-                      <p className="text-xs text-muted-foreground">Duration: {formatAudioDuration(bgm.duration)}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {bgmCurrentTime.toFixed(2)}s / {bgm.duration.toFixed(2)}s
-                      </p>
+                  <div className="space-y-6">
+                    {/* BGM Header with File Info */}
+                    <div className="bg-muted/30 rounded-lg p-4 border border-border">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <Volume2 size={16} className="text-primary" />
+                          <span className="font-medium text-sm">Now Playing</span>
+                        </div>
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <span>{bgmCurrentTime.toFixed(1)}s</span>
+                          <span>/</span>
+                          <span>{bgm.duration.toFixed(1)}s</span>
+                        </div>
+                      </div>
+                      <div className="text-sm font-medium truncate">{bgm.fileName}</div>
+                      <div className="text-xs text-muted-foreground">{formatAudioDuration(bgm.duration)}</div>
                     </div>
 
-                    {/* BGM Scrubber */}
-                    <input
-                      type="range"
-                      min="0"
-                      max={bgm.duration || 0}
-                      step="0.01"
-                      value={bgmCurrentTime}
-                      onChange={(e) => {
-                        const time = parseFloat(e.target.value);
-                        setBgmCurrentTime(time);
-                        if (bgmAudioRef.current) bgmAudioRef.current.currentTime = time;
-                      }}
-                      className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
-                    />
+                    {/* BGM Progress Bar */}
+                    <div className="space-y-2">
+                      <input
+                        type="range"
+                        min="0"
+                        max={bgm.duration || 0}
+                        step="0.01"
+                        value={bgmCurrentTime}
+                        onChange={(e) => {
+                          const time = parseFloat(e.target.value);
+                          setBgmCurrentTime(time);
+                          if (bgmAudioRef.current) bgmAudioRef.current.currentTime = time;
+                        }}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
+                      />
+                    </div>
 
-                    {/* BGM Controls */}
-                    <div className="grid grid-cols-4 gap-2">
+                    {/* BGM Main Controls */}
+                    <div className="flex items-center justify-center gap-3">
+                      <button
+                        onClick={restartBGM}
+                        className="flex items-center justify-center p-2 bg-muted hover:bg-muted/80 text-muted-foreground rounded-lg transition-colors"
+                        title="Restart"
+                      >
+                        <RotateCcw size={16} />
+                      </button>
                       <button
                         onClick={toggleBGMPlayback}
-                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors audio-control ${
+                        className={`flex items-center justify-center p-3 rounded-full transition-all transform hover:scale-105 ${
                           bgmPlaying 
-                            ? 'bg-green-600 hover:bg-green-700 text-white active' 
-                            : 'bg-primary hover:bg-primary/90 text-primary-foreground'
+                            ? 'bg-green-600 hover:bg-green-700 text-white shadow-lg shadow-green-600/25' 
+                            : 'bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg shadow-primary/25'
                         }`}
+                        title={bgmPlaying ? 'Pause' : 'Play'}
                       >
-                        {bgmPlaying ? <Pause size={14} /> : <Play size={14} />}
+                        {bgmPlaying ? <Pause size={20} /> : <Play size={20} />}
                       </button>
                       <button
                         onClick={stopBGM}
-                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors audio-control ${
+                        className={`flex items-center justify-center p-2 rounded-lg transition-colors ${
                           bgmPlaying 
                             ? 'bg-red-600 hover:bg-red-700 text-white' 
                             : 'bg-muted hover:bg-muted/80 text-muted-foreground'
                         }`}
+                        title="Stop"
                       >
-                        <X size={14} />
-                      </button>
-                      <button
-                        onClick={restartBGM}
-                        className="flex items-center justify-center p-2 bg-muted hover:bg-muted/80 text-muted-foreground rounded font-medium text-sm transition-colors audio-control"
-                      >
-                        <RotateCcw size={14} />
+                        <X size={16} />
                       </button>
                       <button
                         onClick={() => {
@@ -1251,19 +1666,43 @@ export default function AudioTesterTool() {
                         }}
                         aria-pressed={bgmLoop}
                         title={bgmLoop ? 'Loop enabled' : 'Enable loop'}
-                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors audio-control ${
-                          bgmLoop ? 'bg-green-600 hover:bg-green-700 text-white active' : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
+                        className={`flex items-center justify-center p-2 rounded-lg transition-colors ${
+                          bgmLoop ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-muted hover:bg-muted/80 text-muted-foreground'
                         }`}
                       >
-                        <Repeat2 size={14} />
+                        <Repeat2 size={16} />
                       </button>
                     </div>
 
-                    {/* Volume */}
-                    <div className="space-y-3 border-t border-border pt-3">
-                      <div>
-                        <label className="text-xs font-medium text-muted-foreground mb-2 block">
-                          Volume: {Math.round(bgmVolume * 100)}%
+                    {/* BGM Settings Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Volume Control */}
+                      <div className="bg-muted/30 rounded-lg p-4 border border-border">
+                        <label className="flex items-center justify-between text-xs font-medium text-muted-foreground mb-3">
+                          <span>Volume</span>
+                          <div className="flex items-center gap-2">
+                            <span className={`font-medium ${
+                              bgmFadeStatus !== 'normal' ? 'text-orange-400' : 'text-primary'
+                            }`}>
+                              {Math.round(bgmEffectiveVolume * 100)}%
+                            </span>
+                            {bgmFadeStatus !== 'normal' && (
+                              <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                bgmFadeStatus === 'faded' 
+                                  ? 'bg-orange-500/20 text-orange-400' 
+                                  : bgmFadeStatus === 'fading-out'
+                                  ? 'bg-yellow-500/20 text-yellow-400'
+                                  : 'bg-green-500/20 text-green-400'
+                              }`}>
+                                {bgmFadeStatus === 'faded' 
+                                  ? '50%' 
+                                  : bgmFadeStatus === 'fading-out'
+                                  ? 'Fading...'
+                                  : 'Restoring...'
+                                }
+                              </span>
+                            )}
+                          </div>
                         </label>
                         <input
                           type="range"
@@ -1274,298 +1713,216 @@ export default function AudioTesterTool() {
                           onChange={(e) => {
                             const vol = parseFloat(e.target.value);
                             setBgmVolume(vol);
-                            originalBGMVolumeRef.current = vol; // Update original volume
+                            originalBGMVolumeRef.current = vol;
+                            setBgmEffectiveVolume(vol); // Update effective volume when not fading
                             if (bgmAudioRef.current) bgmAudioRef.current.volume = vol * masterVolume;
                           }}
                           className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
                         />
+                        {bgmFadeStatus !== 'normal' && (
+                          <div className="text-xs text-muted-foreground mt-2">
+                            {bgmFadeStatus === 'faded' && 'BGM reduced to 50% for Win Dialogue'}
+                            {bgmFadeStatus === 'fading-out' && 'Fading BGM to 50%...'}
+                            {bgmFadeStatus === 'fading-in' && 'Restoring BGM to 100%...'}
+                          </div>
+                        )}
                       </div>
 
-                      
-
+                      {/* File Actions */}
+                      <div className="bg-muted/30 rounded-lg p-4 border border-border">
+                        <div className="text-xs font-medium text-muted-foreground mb-3">File Actions</div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleBGMReplace}
+                            disabled={replacingBGM}
+                            className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded-lg text-sm transition-colors disabled:opacity-50"
+                          >
+                            <Upload size={14} />
+                            Replace
+                          </button>
+                          <button
+                            onClick={() => {
+                              deleteAudioFile(bgm);
+                              setBgm(null);
+                              setBgmPlaying(false);
+                            }}
+                            className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-red-900/30 hover:bg-red-900/40 text-red-400 rounded-lg text-sm transition-colors"
+                          >
+                            <Trash2 size={14} />
+                            Delete
+                          </button>
                         </div>
-
-                    {/* File Actions */}
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleBGMReplace}
-                        disabled={replacingBGM}
-                        className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded font-medium text-sm transition-colors disabled:opacity-50"
-                      >
-                        <Upload size={14} />
-                        Replace
-                      </button>
-                      <button
-                        onClick={() => {
-                          deleteAudioFile(bgm);
-                          setBgm(null);
-                          setBgmPlaying(false);
-                        }}
-                        className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-red-900/30 hover:bg-red-900/40 text-red-400 rounded font-medium text-sm transition-colors"
-                      >
-                        <Trash2 size={14} />
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* Win Dialogue Section */}
-          <section className="rounded-lg border border-border bg-card/30 overflow-hidden">
-            <button
-              onClick={() => toggleSection('winDialogue')}
-              className="w-full flex items-center justify-between p-4 hover:bg-card/50 transition-colors border-b border-border"
-            >
-              <div className="flex items-center gap-2">
-                <Volume2 size={18} className="text-primary" />
-                <h2 className="font-semibold">Win Dialogue</h2>
-              </div>
-              {expandedSections.winDialogue ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-            </button>
-
-            {expandedSections.winDialogue && (
-              <div className="p-4 space-y-4">
-                {!winDialogue ? (
-                  <div 
-                    onDragOver={handleWinDialogueDragOver}
-                    onDragLeave={handleWinDialogueDragLeave}
-                    onDrop={handleWinDialogueDrop}
-                    onClick={() => {
-                      const input = document.createElement('input');
-                      input.type = 'file';
-                      input.accept = 'audio/*';
-                      input.onchange = handleWinDialogueUpload;
-                      input.click();
-                    }}
-                    className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-border rounded-lg cursor-pointer hover:bg-card/50 transition-colors"
-                  >
-                    <Upload size={24} className="text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Upload Win Dialogue audio file or drag folder</span>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">File: {winDialogue.fileName}</p>
-                      <p className="text-xs text-muted-foreground">Duration: {formatAudioDuration(winDialogue.duration)}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {winDialogueCurrentTime.toFixed(2)}s / {winDialogue.duration.toFixed(2)}s
-                      </p>
-                    </div>
-
-                    {/* Win Dialogue Scrubber */}
-                    <input
-                      type="range"
-                      min="0"
-                      max={winDialogue.duration || 0}
-                      step="0.01"
-                      value={winDialogueCurrentTime}
-                      onChange={(e) => {
-                        const time = parseFloat(e.target.value);
-                        setWinDialogueCurrentTime(time);
-                        if (winDialogueAudioRef.current) winDialogueAudioRef.current.currentTime = time;
-                      }}
-                      className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
-                    />
-
-                    {/* Win Dialogue Controls */}
-                    <div className="grid grid-cols-4 gap-2">
-                      <button
-                        onClick={toggleWinDialoguePlayback}
-                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors ${
-                          winDialoguePlaying 
-                            ? 'bg-green-600 hover:bg-green-700 text-white' 
-                            : 'bg-primary hover:bg-primary/90 text-primary-foreground'
-                        }`}
-                      >
-                        {winDialoguePlaying ? <Pause size={14} /> : <Play size={14} />}
-                      </button>
-                      <button
-                        onClick={stopWinDialogue}
-                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors ${
-                          winDialoguePlaying 
-                            ? 'bg-red-600 hover:bg-red-700 text-white' 
-                            : 'bg-muted hover:bg-muted/80 text-muted-foreground'
-                        }`}
-                      >
-                        <X size={14} />
-                      </button>
-                      <button
-                        onClick={restartWinDialogue}
-                        className="flex items-center justify-center p-2 bg-muted hover:bg-muted/80 text-muted-foreground rounded font-medium text-sm transition-colors"
-                      >
-                        <RotateCcw size={14} />
-                      </button>
-                      <button
-                        onClick={() => {
-                          const next = !winDialogueLoop;
-                          setWinDialogueLoop(next);
-                          if (winDialogueAudioRef.current) winDialogueAudioRef.current.loop = next;
-                        }}
-                        aria-pressed={winDialogueLoop}
-                        title={winDialogueLoop ? 'Loop enabled' : 'Enable loop'}
-                        className={`flex items-center justify-center p-2 rounded font-medium text-sm transition-colors ${
-                          winDialogueLoop ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-100'
-                        }`}
-                      >
-                        <Repeat2 size={14} />
-                      </button>
-                    </div>
-
-                    {/* Volume */}
-                    <div className="space-y-3 border-t border-border pt-3">
-                      <div>
-                        <label className="text-xs font-medium text-muted-foreground mb-2 block">
-                          Volume: {Math.round(winDialogueVolume * 100)}%
-                        </label>
-                        <input
-                          type="range"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={winDialogueVolume}
-                          onChange={(e) => {
-                            const vol = parseFloat(e.target.value);
-                            setWinDialogueVolume(vol);
-                            if (winDialogueAudioRef.current) winDialogueAudioRef.current.volume = vol * masterVolume;
-                          }}
-                          className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
-                        />
                       </div>
-
-                    </div>
-
-                    {/* File Actions */}
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleWinDialogueReplace}
-                        disabled={replacingWinDialogue}
-                        className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded font-medium text-sm transition-colors disabled:opacity-50"
-                      >
-                        <Upload size={14} />
-                        Replace
-                      </button>
-                      <button
-                        onClick={() => {
-                          deleteAudioFile(winDialogue);
-                          setWinDialogue(null);
-                          setWinDialoguePlaying(false);
-                        }}
-                        className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-red-900/30 hover:bg-red-900/40 text-red-400 rounded font-medium text-sm transition-colors"
-                      >
-                        <Trash2 size={14} />
-                        Delete
-                      </button>
                     </div>
                   </div>
                 )}
               </div>
             )}
           </section>
-
-
-
         </div>
 
-        
-
-        {/* Center: SFX Controllers (2 columns) */}
-        <div className="lg:col-span-2 space-y-6">
+        {/* Right: Win Dialogue */}
+        <div className="space-y-6">
           <section className="rounded-lg border border-border bg-card/30 overflow-hidden">
             <div className="flex items-center justify-between p-4 border-b border-border">
               <h2 className="font-semibold flex items-center gap-2">
-                <Zap size={18} className="text-primary" />
-                Sound Effects ({sfxTracks.length})
-                <span className="text-sm text-muted-foreground ml-3">Active SFX {activeSFXCount} of {polyphonyLimit}</span>
+                <Volume2 size={18} className="text-primary" />
+                Win Dialogue ({winDialogueTracks.length}/8)
               </h2>
               <div className="flex gap-2">
-                {sfxTracks.length > 0 && (
-                  <button
-                    onClick={playAllSFX}
-                    className="flex items-center justify-center gap-1 px-3 py-2 bg-green-600 hover:bg-green-500 text-white rounded font-medium text-sm transition-colors"
-                    title="Play all SFX simultaneously"
-                  >
-                    <Play size={16} />
-                    Play All
-                  </button>
-                )}
                 <button
                   onClick={() => {
                     const input = document.createElement('input');
                     input.type = 'file';
                     input.accept = 'audio/*';
-                    input.onchange = handleSFXUpload;
+                    input.multiple = true;
+                    input.webkitdirectory = false;
+                    input.onchange = async (e) => {
+                      const target = e.target as HTMLInputElement;
+                      const files = Array.from(target.files || []);
+                      
+                      if (files.length === 0) return;
+                      
+                      // Check if adding these files would exceed the 8 file limit
+                      const availableSlots = 8 - winDialogueTracks.length;
+                      const filesToProcess = files.slice(0, availableSlots);
+                      
+                      if (filesToProcess.length === 0) {
+                        toast({ 
+                          title: 'Upload failed', 
+                          description: 'Maximum 8 Win Dialogue files allowed' 
+                        });
+                        return;
+                      }
+                      
+                      if (files.length > availableSlots) {
+                        toast({ 
+                          title: 'Limited upload', 
+                          description: `Only first ${availableSlots} files will be uploaded (8 file limit)` 
+                        });
+                      }
+                      
+                      // Process each file
+                      for (const file of filesToProcess) {
+                        const mockEvent = {
+                          target: { files: [file] }
+                        } as unknown as React.ChangeEvent<HTMLInputElement>;
+                        await handleWinDialogueUpload(mockEvent);
+                      }
+                    };
                     input.click();
                   }}
                   className="flex items-center justify-center gap-1 px-3 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded font-medium text-sm transition-colors"
+                  disabled={winDialogueTracks.length >= 8}
                 >
                   <Plus size={16} />
-                  Add SFX
+                  Add Win Dialogue
                 </button>
               </div>
             </div>
 
             <div className="p-4">
-              {sfxTracks.length === 0 ? (
+              {winDialogueTracks.length === 0 ? (
                 <div
-                  onDragOver={handleSFXDragOver}
-                  onDragLeave={handleSFXDragLeave}
-                  onDrop={handleSFXDrop}
+                  onDragOver={handleWinDialogueDragOver}
+                  onDragLeave={handleWinDialogueDragLeave}
+                  onDrop={handleWinDialogueDrop}
                   onClick={() => {
                     const input = document.createElement('input');
                     input.type = 'file';
                     input.accept = 'audio/*';
-                    input.onchange = handleSFXUpload;
+                    input.multiple = true;
+                    input.webkitdirectory = false;
+                    input.onchange = async (e) => {
+                      const target = e.target as HTMLInputElement;
+                      const files = Array.from(target.files || []);
+                      
+                      if (files.length === 0) return;
+                      
+                      // Check if adding these files would exceed the 8 file limit
+                      const availableSlots = 8 - winDialogueTracks.length;
+                      const filesToProcess = files.slice(0, availableSlots);
+                      
+                      if (filesToProcess.length === 0) {
+                        toast({ 
+                          title: 'Upload failed', 
+                          description: 'Maximum 8 Win Dialogue files allowed' 
+                        });
+                        return;
+                      }
+                      
+                      if (files.length > availableSlots) {
+                        toast({ 
+                          title: 'Limited upload', 
+                          description: `Only first ${availableSlots} files will be uploaded (8 file limit)` 
+                        });
+                      }
+                      
+                      // Process each file
+                      for (const file of filesToProcess) {
+                        const mockEvent = {
+                          target: { files: [file] }
+                        } as unknown as React.ChangeEvent<HTMLInputElement>;
+                        await handleWinDialogueUpload(mockEvent);
+                      }
+                    };
                     input.click();
                   }}
                   className="text-center py-8 text-muted-foreground border-2 border-dashed border-border rounded-lg transition-colors cursor-pointer hover:bg-card/50"
                 >
-                  <Zap size={32} className="mx-auto mb-3 opacity-50" />
-                  <p className="text-sm font-medium">Click to browse or drag audio files here</p>
-                  <p className="text-xs text-muted-foreground mt-1">Supports WAV, MP3, OGG, AAC, FLAC and folders</p>
+                  <Volume2 size={32} className="mx-auto mb-3 opacity-50" />
+                  <p className="text-sm font-medium">Click to browse or drag Win Dialogue files here</p>
+                  <p className="text-xs text-muted-foreground mt-1">Maximum 8 files supported</p>
                 </div>
               ) : (
                 <div
-                  onDragOver={handleSFXDragOver}
-                  onDragLeave={handleSFXDragLeave}
-                  onDrop={handleSFXDrop}
+                  onDragOver={handleWinDialogueDragOver}
+                  onDragLeave={handleWinDialogueDragLeave}
+                  onDrop={handleWinDialogueDrop}
                   className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 transition-colors rounded-lg p-4 -m-4"
                 >
-                  {sfxTracks.map((sfx) => (
+                  {winDialogueTracks.map((winDialogue) => (
                     <SFXController
-                      key={sfx.id}
-                      sfxId={sfx.id}
-                      fileName={sfx.fileName}
-                      duration={sfx.duration}
-                      audioRef={sfxAudioRefs.current.get(sfx.id) ? { current: sfxAudioRefs.current.get(sfx.id)! } : { current: null }}
-                      volume={sfx.volume}
-                      loop={sfx.loop}
-                      isPlaying={sfx.isPlaying}
-                      currentTime={sfx.currentTime}
+                      key={winDialogue.id}
+                      sfxId={winDialogue.id}
+                      fileName={winDialogue.fileName}
+                      duration={winDialogue.duration}
+                      audioRef={React.createRef()}
+                      volume={winDialogue.volume}
+                      loop={winDialogue.loop}
+                      isPlaying={winDialogue.isPlaying}
+                      currentTime={winDialogue.currentTime}
                       onVolumeChange={(vol) => {
-                        setSfxTracks((prev) =>
-                          prev.map((t) => (t.id === sfx.id ? { ...t, volume: vol } : t))
+                        setWinDialogueTracks((prev) =>
+                          prev.map((t) => (t.id === winDialogue.id ? { ...t, volume: vol } : t))
                         );
-                        const audioEl = sfxAudioRefs.current.get(sfx.id);
+                        const audioEl = winDialogueAudioRefs.current.get(winDialogue.id);
                         if (audioEl) audioEl.volume = vol * masterVolume;
                       }}
                       onLoopToggle={(loop) => {
-                        setSfxTracks((prev) =>
-                          prev.map((t) => (t.id === sfx.id ? { ...t, loop } : t))
+                        setWinDialogueTracks((prev) =>
+                          prev.map((t) => (t.id === winDialogue.id ? { ...t, loop } : t))
                         );
-                        const audioEl = sfxAudioRefs.current.get(sfx.id);
+                        const audioEl = winDialogueAudioRefs.current.get(winDialogue.id);
                         if (audioEl) audioEl.loop = loop;
                       }}
-                      onPlay={() => playSFX(sfx.id)}
-                      onPause={() => pauseSFX(sfx.id)}
-                      onStop={() => stopSFX(sfx.id)}
-                      onRestart={() => restartSFX(sfx.id)}
-                      onReplace={() => handleSFXReplace(sfx.id)}
-                      onDelete={() => handleSFXDelete(sfx.id)}
-                      onSeek={(time) => seekSFX(sfx.id, time)}
-                      isReplacing={replacingSFXId === sfx.id}
+                      onPlay={() => toggleWinDialoguePlayback(winDialogue.id)}
+                      onPause={() => toggleWinDialoguePlayback(winDialogue.id)}
+                      onStop={() => stopWinDialogue(winDialogue.id)}
+                      onRestart={() => restartWinDialogue(winDialogue.id)}
+                      onReplace={() => handleWinDialogueReplace(winDialogue.id)}
+                      onDelete={() => {
+                        deleteAudioFile(winDialogue);
+                        setWinDialogueTracks((prev) => prev.filter((t) => t.id !== winDialogue.id));
+                      }}
+                      onSeek={(time) => {
+                        const audioEl = winDialogueAudioRefs.current.get(winDialogue.id);
+                        if (audioEl) audioEl.currentTime = time;
+                        setWinDialogueTracks(prev => prev.map(t => 
+                          t.id === winDialogue.id ? { ...t, currentTime: time } : t
+                        ));
+                      }}
+                      isReplacing={replacingWinDialogue}
                     />
                   ))}
                 </div>
@@ -1574,199 +1931,138 @@ export default function AudioTesterTool() {
           </section>
         </div>
 
-        {/* Top Right: Reference Image (1 column) */}
-        <div className="lg:col-span-1 space-y-6 min-h-fit">
-          {/* Audio Reference Image */}
+        {/* Right: Uploadable Image */}
+        <div className="space-y-6">
           <section className="rounded-lg border border-border bg-card/30 overflow-hidden">
-            <button
-              onClick={() => toggleSection('image')}
-              className="w-full flex items-center justify-between p-4 hover:bg-card/50 transition-colors border-b border-border"
-            >
-              <h3 className="font-semibold text-sm">Reference Image</h3>
-              {expandedSections.image ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-            </button>
-
-            {expandedSections.image && (
-              <div className="p-4 space-y-4">
+            <div className="p-2">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="font-semibold flex items-center gap-2 text-sm">
+                  <Image size={14} className="text-primary" />
+                  Image Display
+                </h2>
+                {image && (
+                  <button
+                    onClick={handleImageReplace}
+                    className="flex items-center justify-center gap-1 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded font-medium text-sm transition-colors"
+                    title="Replace image"
+                  >
+                    <Upload size={14} />
+                    Replace Image
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center justify-center">
                 {!image ? (
-                  <label className="flex flex-col items-center justify-center gap-3 p-4 border-2 border-dashed border-border rounded-lg cursor-pointer hover:bg-card/50 transition-colors">
-                    <Upload size={20} className="text-muted-foreground" />
-                    <span className="text-xs text-muted-foreground text-center">Upload reference image.</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageUpload}
-                      className="hidden"
-                    />
-                  </label>
+                  <div 
+                    onClick={() => {
+                      const input = document.createElement('input');
+                      input.type = 'file';
+                      input.accept = 'image/*';
+                      input.onchange = (e) => {
+                        const target = e.target as HTMLInputElement;
+                        handleImageUpload({ target } as React.ChangeEvent<HTMLInputElement>);
+                      };
+                      input.click();
+                    }}
+                    className="w-full max-w-[300px] h-[630px] border-2 border-dashed border-border rounded-lg cursor-pointer hover:bg-card/50 transition-colors flex flex-col items-center justify-center gap-2"
+                  >
+                    <Upload size={24} className="text-muted-foreground" />
+                    <span className="text-xs text-muted-foreground text-center">Upload image</span>
+                  </div>
                 ) : (
-                  <div className="space-y-3">
-                    {/* Fixed Image Container */}
-                    <div
-                      style={{
-                        width: '200px',
-                        height: '500px',
-                        margin: '0 auto',
-                      }}
-                      className="border border-border rounded-lg overflow-hidden bg-slate-900/50 flex items-center justify-center"
-                    >
-                      <img
-                        src={image.url || "/placeholder.svg"}
-                        alt="Reference"
-                        style={{
-                          maxWidth: '100%',
-                          maxHeight: '100%',
-                          objectFit: imageFitMode === 'contain' ? 'contain' : 'cover',
-                          opacity: imageOpacity,
-                        }}
-                        className="w-full h-full"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <select
-                        value={imageFitMode}
-                        onChange={(e) => setImageFitMode(e.target.value as 'contain' | 'cover')}
-                        className="w-full px-3 py-2 bg-muted text-muted-foreground text-sm rounded border border-border"
+                  <div className="relative w-[300px] h-[630px]">
+                    <img 
+                      src={image.url} 
+                      alt="Uploaded Display"
+                      className="w-full h-full object-cover rounded border border-border"
+                    />
+                    <div className="absolute top-2 right-2 flex gap-1 opacity-0 hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={handleImageReplace}
+                        className="p-1 bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-colors"
+                        title="Replace image"
                       >
-                        <option value="contain">Contain</option>
-                        <option value="cover">Cover</option>
-                      </select>
-
-                      <div>
-                        <label className="text-xs font-medium text-muted-foreground mb-2 block">
-                          Opacity: {Math.round(imageOpacity * 100)}%
-                        </label>
-                        <input
-                          type="range"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={imageOpacity}
-                          onChange={(e) => setImageOpacity(parseFloat(e.target.value))}
-                          className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
-                        />
-                      </div>
-
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleImageReplace}
-                          className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 rounded font-medium text-sm transition-colors"
-                        >
-                          <Upload size={14} />
-                          Replace
-                        </button>
-                        <button
-                          onClick={() => {
-                            deleteImageFile(image);
-                            setImage(null);
-                          }}
-                          className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-red-900/30 hover:bg-red-900/40 text-red-400 rounded font-medium text-sm transition-colors"
-                        >
-                          <Trash2 size={14} />
-                          Delete
-                        </button>
-                      </div>
+                        <Upload size={12} />
+                      </button>
+                      <button
+                        onClick={() => {
+                          deleteImageFile(image);
+                          setImage(null);
+                        }}
+                        className="p-1 bg-red-600 hover:bg-red-700 text-white rounded-full transition-colors"
+                        title="Delete image"
+                      >
+                        <X size={12} />
+                      </button>
                     </div>
                   </div>
                 )}
               </div>
-            )}
+            </div>
           </section>
         </div>
-
-        
+      </div>
       </div>
 
-      {/* Bottom Row: Master Control | Additional Controls */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 p-6 max-w-full border-t border-border">
-        {/* Bottom Left: Master Control (1 column) */}
-        <div className="lg:col-span-1">
-          <section className="rounded-lg border border-border bg-card/30 p-4 space-y-4">
-            <h3 className="font-semibold text-sm">Master Control</h3>
-            
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-2 block">
-                Master Volume: {Math.round(masterVolume * 100)}%
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={masterVolume}
-                onChange={(e) => setMasterVolume(parseFloat(e.target.value))}
-                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary"
-              />
-            </div>
-
-            {/* Queue Status */}
-            {(queueStats.totalQueued > 0 || queueStats.currentlyPlaying > 0) && (
-              <div className="bg-primary/10 border border-primary/30 rounded p-3 space-y-1 text-xs">
-                <p className="text-muted-foreground">
-                  <strong>Queued:</strong> {queueStats.totalQueued}
-                </p>
-                {queueStats.currentlyPlaying > 0 && (
-                  <p className="text-muted-foreground">
-                    <strong>Playing:</strong> {queueStats.currentlyPlaying}
-                  </p>
-                )}
-                {queueStats.completed > 0 && (
-                  <p className="text-muted-foreground">
-                    <strong>Completed:</strong> {queueStats.completed}
-                  </p>
-                )}
-              </div>
-            )}
-          </section>
-        </div>
-
-        {/* Bottom Center: Empty space to align with SFX (2 columns) */}
-        <div className="lg:col-span-2"></div>
-
-        {/* Bottom Right: Summary Info (1 column) */}
-        <div className="lg:col-span-1">
-          <div className="rounded-lg border border-border bg-card/30 p-4">
-            <p className="text-xs text-muted-foreground mb-2">Playback Summary</p>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">BGM Status:</span>
-                <span className="font-medium">{bgmPlaying ? 'Playing' : bgm ? 'Loaded' : 'None'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Win Dialogue Status:</span>
-                <span className="font-medium">{winDialoguePlaying ? 'Playing' : winDialogue ? 'Loaded' : 'None'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">SFX Loaded:</span>
-                <span className="font-medium">{sfxTracks.length}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Active SFX:</span>
-                <span className="font-medium text-primary">{activeSFXCount}</span>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Audio Elements */}
+      <div className="hidden">
+        {bgm && (
+          <audio
+            ref={bgmAudioRef}
+            src={bgm.url}
+            onTimeUpdate={() => setBgmCurrentTime(bgmAudioRef.current?.currentTime || 0)}
+            onEnded={() => setBgmPlaying(false)}
+            crossOrigin="anonymous"
+          />
+        )}
+        {sfxTracks.map((sfx) => (
+          <audio
+            key={sfx.id}
+            ref={(el) => {
+              if (el) sfxAudioRefs.current.set(sfx.id, el);
+            }}
+            src={sfx.url}
+            onTimeUpdate={() => {
+              const audioEl = sfxAudioRefs.current.get(sfx.id);
+              if (audioEl) {
+                setSfxTracks((prev) =>
+                  prev.map((t) => (t.id === sfx.id ? { ...t, currentTime: audioEl.currentTime } : t))
+                );
+              }
+            }}
+            onEnded={() => {
+              setSfxTracks((prev) =>
+                prev.map((t) => (t.id === sfx.id ? { ...t, isPlaying: false } : t))
+              );
+            }}
+            crossOrigin="anonymous"
+          />
+        ))}
+        {winDialogueTracks.map((winDialogue) => (
+          <audio
+            key={winDialogue.id}
+            ref={(el) => {
+              if (el) winDialogueAudioRefs.current.set(winDialogue.id, el);
+            }}
+            src={winDialogue.url}
+            onTimeUpdate={() => {
+              const audioEl = winDialogueAudioRefs.current.get(winDialogue.id);
+              if (audioEl) {
+                setWinDialogueTracks((prev) =>
+                  prev.map((t) => (t.id === winDialogue.id ? { ...t, currentTime: audioEl.currentTime } : t))
+                );
+              }
+            }}
+            onEnded={() => {
+              setWinDialogueTracks((prev) =>
+                prev.map((t) => (t.id === winDialogue.id ? { ...t, isPlaying: false } : t))
+              );
+            }}
+            crossOrigin="anonymous"
+          />
+        ))}
       </div>
-
-      {/* Hidden Audio Elements */}
-      {bgm && (
-        <audio
-          ref={bgmAudioRef}
-          src={bgm.url}
-          onTimeUpdate={() => setBgmCurrentTime(bgmAudioRef.current?.currentTime || 0)}
-          crossOrigin="anonymous"
-        />
-      )}
-      {winDialogue && (
-        <audio
-          ref={winDialogueAudioRef}
-          src={winDialogue.url}
-          onTimeUpdate={() => setWinDialogueCurrentTime(winDialogueAudioRef.current?.currentTime || 0)}
-          crossOrigin="anonymous"
-        />
-      )}
-    </div>
+      </div>
+    </Layout>
   );
 }
